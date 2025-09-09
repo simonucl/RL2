@@ -87,9 +87,6 @@ async def reset(extra_info: Dict[str, Any], **kwargs) -> str:
     
     try:
         observation, _ = ENV_POOL[env_idx].reset(seed=233 + env_idx)
-        
-        if isinstance(observation, list):
-            observation = observation[0]
 
         formatted_observation = TEMPLATE_FACTORY[PROMPT_TEMPLATE](observation)
         
@@ -107,18 +104,7 @@ async def step(state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str,
         raise RuntimeError(f"Environment {env_idx} not locked - reset() must be called first")
     
     try:
-        next_obs, reward, terminated, truncated, info = ENV_POOL[env_idx].step([action])
-        
-        if isinstance(next_obs, list):
-            next_obs = next_obs[0]
-        if isinstance(reward, list):
-            reward = reward[0]
-        if isinstance(terminated, list):
-            terminated = terminated[0]
-        if isinstance(truncated, list):
-            truncated = truncated[0]
-        if isinstance(info, list):
-            info = info[0] if info else {}
+        next_obs, reward, terminated, truncated, info = ENV_POOL[env_idx].step(action)
         
         done = terminated or truncated
         
