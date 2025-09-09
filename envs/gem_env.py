@@ -54,12 +54,12 @@ def _initialize_environments():
     
     for i in range(NUM_ENVS):
         try:
-            env = gem.make_vec(
-                [GAME],
-                vec_kwargs=[{"seed": 233 + i}],
-                wrappers=get_wrapper_fns(WRAPPERS.split(",") if WRAPPERS else [], tokenizer=None),
-                async_mode=False,
+            env = gem.make(
+                env_id=GAME,
+                seed=233 + i,
             )
+            for wrapper in get_wrapper_fns(WRAPPERS if WRAPPERS else "", tokenizer=None):
+                env = wrapper(env)
             ENV_POOL.append(env)
             ENV_LOCKS.append(asyncio.Lock())
             ENV_IN_USE.append(False)
@@ -86,7 +86,7 @@ async def reset(extra_info: Dict[str, Any], **kwargs) -> str:
     env_idx = await acquire_env_lock(extra_info)
     
     try:
-        observation, _ = ENV_POOL[env_idx].reset()
+        observation, _ = ENV_POOL[env_idx].reset(seed=233 + env_idx)
         
         if isinstance(observation, list):
             observation = observation[0]
