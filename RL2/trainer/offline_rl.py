@@ -2,12 +2,13 @@ import hydra
 from collections import defaultdict
 import torch.distributed as dist
 from tqdm import tqdm
+import wandb
 from RL2.trainer import Trainer
 from RL2.datasets import OfflineRLDataset, get_dataloader
 from RL2.workers import Actor
 from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.functions import aggregate_values
-from RL2.utils.algorithms import compute_offline_advantages
+from RL2.utils.algorithms import compute_offline_advantages, compute_approx_kl
 from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.checkpointing import load_ckpt, save_ckpt, save_model
 from RL2.utils.logging import progress_bar, time_logger, gather_and_log
@@ -28,12 +29,19 @@ def update(worker, minibatches, step):
         # Remove non-sequence data before forward pass
         forward_minibatch = {
             k: v for k, v in minibatch.items() 
-            if k not in ["advantages", "labels"]
+            if k not in ["advantages", "labels", "kl_penalty"]
         }
         logps = worker.forward(forward_minibatch)
         
+        # Compute base policy gradient loss
+        policy_loss = - logps * minibatch["advantages"]
+        
+        # Add KL penalty if available
+        if "kl_penalty" in minibatch:
+            policy_loss += minibatch["kl_penalty"]
+        
         loss = aggregate_values(
-            - logps * minibatch["advantages"],
+            policy_loss,
             minibatch["action_mask"],
             worker.config.avg_level,
             total_actions,
@@ -60,6 +68,10 @@ class OfflineRLTrainer(Trainer):
             dataset, config.data.batch_size
         )
         self.actor.scheduler = self.prepare_scheduler(self.actor)
+        
+        # Add reference actor for KL regularization
+        if config.offline_rl.kl_coef > 0:
+            self.ref_actor = Actor(config.ref_actor, False)
 
     @time_logger("compute_advantages")
     def compute_advantages(self, tensor_dict, step):
@@ -71,6 +83,26 @@ class OfflineRLTrainer(Trainer):
             self.config.offline_rl.negative_label_scale,
             self.config.offline_rl.norm_var
         )["advantages"]
+
+    @time_logger("compute_approx_kl")
+    def compute_approx_kl(self, tensor_dict, step):
+
+        approx_kl = compute_approx_kl(
+            tensor_dict["old_logps"],
+            tensor_dict["ref_logps"],
+            self.config.offline_rl.kl_estimator
+        )
+        tensor_dict["kl_penalty"] = self.config.offline_rl.kl_coef * approx_kl
+        wandb.log({
+            "actor/kl": (approx_kl.sum() / tensor_dict["action_mask"].sum()).item()
+        }, step=step)
+
+    def update_reference_actor(self):
+        """Update reference actor with current actor's state at the end of epoch"""
+        if hasattr(self, 'ref_actor'):
+            self.ref_actor.model.load_state_dict(self.actor.model.state_dict())
+            if dist.get_rank() == 0:
+                print("Updated reference actor with current actor state")
 
     def train(self):
 
@@ -87,11 +119,23 @@ class OfflineRLTrainer(Trainer):
             ):
                 step += 1
                 
+                # Compute log probabilities for KL if needed
+                if self.config.offline_rl.kl_coef > 0:
+                    tensor_dict = self.actor.compute_logps(tensor_dict, step)
+                    tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
+                
                 if dist.get_rank() == 0:
                     self.compute_advantages(tensor_dict, step)
+                    if self.config.offline_rl.kl_coef > 0:
+                        self.compute_approx_kl(tensor_dict, step)
                 
                 update(self.actor, tensor_dict, step)
                 save_ckpt(self, (self.actor,), step)
+            
+            # Update reference actor at the end of each epoch
+            if self.config.offline_rl.kl_coef > 0:
+                self.update_reference_actor()
+                
         save_model(self, self.actor)
 
 

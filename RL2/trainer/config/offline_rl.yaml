@@ -20,10 +20,21 @@ actor:
   warmup_ratio: 0.1
   offload_optimizer: true
 
+ref_actor:
+  model_name: null
+  use_liger_kernel: false
+  gradient_checkpointing: true
+  ddp_size: 1
+  tp_size: 1
+  sp_size: 1
+  max_length_per_device: null
+
 offline_rl:
   positive_label_scale: 1.0  # Scale factor for positive labels
   negative_label_scale: 1.0  # Scale factor for negative labels
   norm_var: false  # Normalize advantages by standard deviation
+  kl_coef: 0.0  # KL divergence coefficient (0.0 = no KL penalty)
+  kl_estimator: k1  # KL estimator type: k1, k2, or k3
 
 trainer:
   project: null
