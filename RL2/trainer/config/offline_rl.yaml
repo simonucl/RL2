@@ -2,6 +2,7 @@ data:
   path: null
   max_length: null
   batch_size: 128
+  label_threshold: null  # Filter examples with |label| < threshold (null = no filtering)
 
 actor:
   model_name: null
@@ -20,7 +21,8 @@ actor:
   offload_optimizer: true
 
 offline_rl:
-  label_scale: 1.0
+  positive_label_scale: 1.0  # Scale factor for positive labels
+  negative_label_scale: 1.0  # Scale factor for negative labels
 
 trainer:
   project: null

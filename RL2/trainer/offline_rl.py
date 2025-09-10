@@ -67,7 +67,8 @@ class OfflineRLTrainer(Trainer):
         tensor_dict['advantages'] = compute_offline_advantages(
             tensor_dict,
             tensor_dict["labels"],
-            self.config.offline_rl.label_scale
+            self.config.offline_rl.positive_label_scale,
+            self.config.offline_rl.negative_label_scale
         )["advantages"]
 
     def train(self):

@@ -8,7 +8,9 @@ torchrun \
     actor.sp_size=4 \
     actor.max_length_per_device=4096 \
     actor.lr=1e-5 \
-    offline_rl.label_scale=1.0 \
+    offline_rl.positive_label_scale=1.0 \
+    offline_rl.negative_label_scale=1.0 \
+    offline_rl.label_threshold=0.0 \
     trainer.project=synthetic_gsm \
     trainer.experiment_name=llama-3.2-1b-inst-offline-rl \
     trainer.n_epochs=4
