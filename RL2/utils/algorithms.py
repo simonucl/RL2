@@ -129,16 +129,26 @@ def compute_reinforce_adv(
     return {"advantages": advantages}
 
 # @action_extractor
-def compute_offline_advantages(tensor_dict, labels, positive_label_scale, negative_label_scale):
+def compute_offline_advantages(tensor_dict, labels, positive_label_scale, negative_label_scale, norm_var=False):
     
     batch_size, seq_length = tensor_dict["action_mask"].shape
     
-    advantages = torch.zeros((batch_size, seq_length))
+    # Apply scaling to raw labels
+    scaled_labels = torch.zeros(batch_size)
     for i in range(batch_size):
         if labels[i] > 0:
-            advantages[i] = labels[i] * positive_label_scale
+            scaled_labels[i] = labels[i] * positive_label_scale
         else:
-            advantages[i] = labels[i] * negative_label_scale
+            scaled_labels[i] = labels[i] * negative_label_scale
     
-    advantages = advantages * tensor_dict["action_mask"]
+    # Compute baseline and normalize if requested
+    baseline = scaled_labels.mean()
+    advantages = scaled_labels - baseline
+    
+    if norm_var:
+        std = scaled_labels.std()
+        advantages /= (std + torch.finfo(advantages.dtype).eps)
+    
+    # Broadcast advantages to sequence length and apply action mask
+    advantages = advantages.unsqueeze(1).expand(-1, seq_length) * tensor_dict["action_mask"]
     return {"advantages": advantages}

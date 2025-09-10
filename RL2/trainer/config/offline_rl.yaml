@@ -23,6 +23,7 @@ actor:
 offline_rl:
   positive_label_scale: 1.0  # Scale factor for positive labels
   negative_label_scale: 1.0  # Scale factor for negative labels
+  norm_var: false  # Normalize advantages by standard deviation
 
 trainer:
   project: null
