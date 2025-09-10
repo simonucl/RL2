@@ -3,3 +3,4 @@ from .sft import SFTDataset
 from .rm import RMDataset
 from .dpo import DPODataset
 from .rl import RLDataset
+from .offline_rl import OfflineRLDataset

@@ -35,12 +35,32 @@ def action_extractor(func):
                 for k, v in tensor_dict.items()
             }
         
+        def _adjust_rewards(tensor_dict):
+
+            gamma = kwargs.get("gamma", 1.0)
+            indices = torch.where(tensor_dict["eos_mask"])
+
+            # Sort by inverted indices to process rewards in reverse order
+            sorted_indices = torch.argsort(indices[0], descending=True)
+            sorted_positions = indices[0][sorted_indices]
+            
+            # Compute future returns with gamma discount
+            future_return = 0
+            for pos in sorted_positions:
+                current_reward = tensor_dict["rewards"][pos]
+                tensor_dict["rewards"][pos] = current_reward + gamma * future_return
+                future_return = tensor_dict["rewards"][pos]
+            
+            return tensor_dict
+
         tensor_dict = pack_tensor_dicts([
             _extract_actions(
-                {
-                    k: v[start_idx:end_idx]
-                    for k, v in raw_tensor_dict.items()
-                }
+                _adjust_rewards(
+                    {
+                        k: v[start_idx:end_idx]
+                        for k, v in raw_tensor_dict.items()
+                    }
+                )
             )
             for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
         ])
@@ -106,4 +126,17 @@ def compute_reinforce_adv(
         )
 
     advantages = advantages.view(-1, 1) * tensor_dict["action_mask"]
+    return {"advantages": advantages}
+
+@action_extractor
+def compute_offline_advantages(tensor_dict, labels, label_scale):
+    
+    batch_size = len(labels)
+    seq_length = tensor_dict["action_mask"].shape[-1]
+    
+    advantages = torch.zeros((batch_size, seq_length))
+    for i, label in enumerate(labels):
+        advantages[i] = label * label_scale
+    
+    advantages = advantages * tensor_dict["action_mask"]
     return {"advantages": advantages}
