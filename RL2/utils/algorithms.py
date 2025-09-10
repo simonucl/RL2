@@ -141,13 +141,14 @@ def compute_offline_advantages(tensor_dict, labels, positive_label_scale, negati
         else:
             scaled_labels[i] = labels[i] * negative_label_scale
     
+    advantages = scaled_labels
     # Compute baseline and normalize if requested
-    baseline = scaled_labels.mean()
-    advantages = scaled_labels - baseline
+    # baseline = scaled_labels.mean()
+    # advantages = scaled_labels - baseline
     
-    if norm_var:
-        std = scaled_labels.std()
-        advantages /= (std + torch.finfo(advantages.dtype).eps)
+    # if norm_var:
+    #     std = scaled_labels.std()
+    #     advantages /= (std + torch.finfo(advantages.dtype).eps)
     
     # Broadcast advantages to sequence length and apply action mask
     advantages = advantages.unsqueeze(1).expand(-1, seq_length) * tensor_dict["action_mask"]
