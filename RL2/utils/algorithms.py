@@ -128,7 +128,7 @@ def compute_reinforce_adv(
     advantages = advantages.view(-1, 1) * tensor_dict["action_mask"]
     return {"advantages": advantages}
 
-@action_extractor
+# @action_extractor
 def compute_offline_advantages(tensor_dict, labels, label_scale):
     
     batch_size, seq_length = tensor_dict["action_mask"].shape

@@ -64,11 +64,11 @@ class OfflineRLTrainer(Trainer):
     @time_logger("compute_advantages")
     def compute_advantages(self, tensor_dict, step):
         
-        compute_offline_advantages(
+        tensor_dict['advantages'] = compute_offline_advantages(
             tensor_dict,
             tensor_dict["labels"],
             self.config.offline_rl.label_scale
-        )
+        )["advantages"]
 
     def train(self):
 
