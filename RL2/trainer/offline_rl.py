@@ -25,7 +25,12 @@ def update(worker, minibatches, step):
     for minibatch in progress_bar(
         minibatches, desc="Update actor"
     ):
-        logps = worker.forward(minibatch)
+        # Remove non-sequence data before forward pass
+        forward_minibatch = {
+            k: v for k, v in minibatch.items() 
+            if k not in ["advantages", "labels"]
+        }
+        logps = worker.forward(forward_minibatch)
         
         loss = aggregate_values(
             - logps * minibatch["advantages"],
