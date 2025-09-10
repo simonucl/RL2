@@ -2,7 +2,7 @@ torchrun \
     --nproc_per_node=8 \
     -m RL2.trainer.ppo \
     train_data.path=null \
-    train_data.prompts_per_rollout=128 \
+    train_data.prompts_per_rollout=512 \
     train_data.responses_per_prompt=1 \
     actor.model_name=Qwen/Qwen3-1.7B-Base \
     actor.sp_size=2 \

@@ -1,14 +1,18 @@
 import random
 import time
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
+from enum import Enum
 import gem
 from gem.wrappers.wrapper_factory import get_wrapper_fns
 import asyncio
+from collections import deque
 
 NUM_ENVS = 16
 GAME = "game:GuessTheNumber-v0"
 WRAPPERS = "concat"
+# GAME = "rg:letter_counting"
+# WRAPPERS = ""
 PROMPT_TEMPLATE = "qwen3_general"
 
 def apply_qwen3_game_template(observation: str) -> str:
@@ -48,173 +52,207 @@ class VectorizedGemEnv:
     
     def __init__(self):
         self.num_envs = NUM_ENVS
-        self.active_episodes = {}
-        self.pending_actions = {}
-        self.episode_states = {}
-        self.action_ready_count = 0
-        self.batch_results = {}
+        print(f"Initializing {NUM_ENVS} vectorized GEM environments...")
         
-        logging.info(f"Initializing {NUM_ENVS} vectorized GEM environments...")
+        # --- NEW: More robust state management ---
+        self.available_buckets = asyncio.Queue()
+        for i in range(self.num_envs):
+            self.available_buckets.put_nowait(i)
         
+        # Mapping and lock for episode-to-bucket assignment
+        self.episode_to_bucket = {}
+        self.episode_to_bucket_lock = asyncio.Lock()
+
+        # --- REFACTORED: Smarter Cohort Management ---
+        self.cohort_id_counter = 0
+        self.episode_to_cohort_id = {}
+        self.cohorts = {}  # cohort_id -> {
+                           #   "episodes": set(), "done_episodes": set(),
+                           #   "pending_actions": {}, "pending_futures": {}, "lock": asyncio.Lock()
+                           # }
+        self.cohort_lock = asyncio.Lock() # Global lock for creating/deleting cohorts
+
+        # --- REMOVED: Old batch counters and global locks ---
+
+        # State for managing reset batching
+        self.reset_pending_futures = {} # bucket_idx -> future
+        self.reset_pending_episodes = {} # bucket_idx -> episode_idx
+        self.reset_lock = asyncio.Lock()
+
         self.vec_env = gem.make_vec(
             [GAME] * NUM_ENVS,
             vec_kwargs=[{"seed": 233 + i} for i in range(NUM_ENVS)],
             wrappers=get_wrapper_fns(WRAPPERS if WRAPPERS else "", tokenizer=None),
             async_mode=True,
         )
+        print(f"Successfully initialized {NUM_ENVS} vectorized GEM environments.")
+
+    async def reset_episode(self, extra_info: Dict[str, Any]) -> str:
+        episode_idx = extra_info['idx']
         
-        logging.info(f"Successfully initialized vectorized GEM environment with {NUM_ENVS} parallel environments")
-    
-    def reset_episode(self, episode_id: str, extra_info: Dict[str, Any]) -> str:
-        available_env_idx = None
-        for i in range(self.num_envs):
-            if i not in self.active_episodes.values():
-                available_env_idx = i
-                break
+        logging.info(f"[Reset] Episode {episode_idx} waiting for an available bucket...")
+        bucket_idx = await self.available_buckets.get()
+        logging.info(f"[Reset] Episode {episode_idx} acquired bucket {bucket_idx}.")
         
-        if available_env_idx is None:
-            raise RuntimeError("No available environments for new episode")
+        async with self.episode_to_bucket_lock:
+            self.episode_to_bucket[episode_idx] = bucket_idx
+
+        future = asyncio.get_running_loop().create_future()
         
-        observations, _ = self.vec_env.reset()
-        observation = observations[available_env_idx]
-        
-        self.active_episodes[episode_id] = available_env_idx
-        self.episode_states[episode_id] = {
-            "env_idx": available_env_idx,
-            "extra_info": extra_info
-        }
-        
-        formatted_observation = TEMPLATE_FACTORY[PROMPT_TEMPLATE](observation)
-        return formatted_observation
-    
-    def add_action(self, episode_id: str, action: str) -> bool:
-        if episode_id not in self.active_episodes:
-            raise RuntimeError(f"Episode {episode_id} not active")
-        
-        self.pending_actions[episode_id] = action
-        self.action_ready_count += 1
-        
-        return self.action_ready_count == len(self.active_episodes)
-    
-    def execute_batch_step(self) -> Dict[str, Dict[str, Any]]:
-        if len(self.pending_actions) != len(self.active_episodes):
-            raise RuntimeError(f"Not all actions ready: {len(self.pending_actions)}/{len(self.active_episodes)}")
-        
-        action_array = [None] * self.num_envs
-        episode_to_idx = {}
-        
-        for episode_id, action in self.pending_actions.items():
-            env_idx = self.active_episodes[episode_id]
-            action_array[env_idx] = action
-            episode_to_idx[episode_id] = env_idx
-        
-        for i in range(self.num_envs):
-            if action_array[i] is None:
-                action_array[i] = ""
-        
-        results = {}
-        
-        try:
-            next_obs_list, reward_list, terminated_list, truncated_list, info_list = self.vec_env.step(action_array)
+        async with self.reset_lock:
+            self.reset_pending_futures[bucket_idx] = future
+            self.reset_pending_episodes[bucket_idx] = episode_idx
             
-            for episode_id, env_idx in episode_to_idx.items():
-                extra_info = self.episode_states[episode_id]["extra_info"]
+            # If the reset batch is full, trigger it
+            if len(self.reset_pending_episodes) == self.num_envs:
+                logging.info("[Reset] Batch is full. Triggering vec_env.reset() and creating new cohort.")
                 
-                next_obs = next_obs_list[env_idx]
-                reward = reward_list[env_idx]
-                terminated = terminated_list[env_idx]
-                truncated = truncated_list[env_idx]
-                info = info_list[env_idx] if info_list else {}
+                # Create the new cohort
+                async with self.cohort_lock:
+                    cohort_id = self.cohort_id_counter
+                    self.cohort_id_counter += 1
+                    
+                    episodes_in_cohort = set(self.reset_pending_episodes.values())
+                    self.cohorts[cohort_id] = {
+                        "episodes": episodes_in_cohort,
+                        "done_episodes": set(),
+                        "pending_actions": {},
+                        "pending_futures": {},
+                        "lock": asyncio.Lock()
+                    }
+                    for ep_idx in episodes_in_cohort:
+                        self.episode_to_cohort_id[ep_idx] = cohort_id
+                    logging.info(f"[Reset] Created Cohort {cohort_id} with episodes: {episodes_in_cohort}")
+
+                observations, _ = self.vec_env.reset()
                 
-                done = terminated or truncated
+                # Distribute results
+                # for b_idx, obs in enumerate(observations):
+                for bucket_idx in range(self.num_envs):
+                    # Get the observation for this specific bucket
+                    obs = observations[bucket_idx]
+                    
+                    # Find which episode and future are waiting for this bucket's result
+                    ep_idx = self.reset_pending_episodes[bucket_idx]
+                    fut = self.reset_pending_futures[bucket_idx]
+                    
+                    template_fn = TEMPLATE_FACTORY.get(PROMPT_TEMPLATE, apply_no_template)
+                    formatted_obs = template_fn(obs)
+                    
+                    # DO NOT change the episode_to_bucket mapping here. It's already correct.
+                    # self.episode_to_bucket[ep_idx] = b_idx # This was the bug!
+                    
+                    if not fut.done():
+                        fut.set_result(formatted_obs)
                 
-                updated_extra_info = {
-                    **extra_info,
-                    **info
-                }
-                
-                if done:
-                    del self.active_episodes[episode_id]
-                    del self.episode_states[episode_id]
-                else:
-                    self.episode_states[episode_id]["extra_info"] = updated_extra_info
-                
-                formatted_next_obs = TEMPLATE_FACTORY[PROMPT_TEMPLATE](next_obs)
-                results[episode_id] = {
-                    "next_state": formatted_next_obs,
-                    "reward": float(reward),
-                    "score": float(reward),
-                    "done": done,
-                    "extra_info": updated_extra_info
-                }
-                
-        except Exception as e:
-            logging.error(f"Error in batch step execution: {e}")
-            for episode_id in list(self.active_episodes.keys()):
-                results[episode_id] = {"error": str(e)}
-            self.active_episodes.clear()
-            self.episode_states.clear()
+                self.reset_pending_futures.clear()
+                self.reset_pending_episodes.clear()
+
+        return await future
+
+    async def step_episode(self, state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str, Any]:
+        episode_idx = extra_info['idx']
+
+        # Find the episode's cohort
+        if episode_idx not in self.episode_to_cohort_id:
+            raise RuntimeError(f"Episode {episode_idx} has no cohort. Did you reset it properly?")
+        cohort_id = self.episode_to_cohort_id[episode_idx]
         
-        self.pending_actions.clear()
-        self.action_ready_count = 0
+        async with self.cohort_lock:
+            if cohort_id not in self.cohorts:
+                # This can happen if the cohort was just cleared. Return a dummy done response.
+                return {"next_state": "", "reward": 0.0, "score": 0.0, "done": True, "extra_info": {}}
+            cohort = self.cohorts[cohort_id]
+
+        future = asyncio.get_running_loop().create_future()
         
-        return results
+        async with cohort["lock"]:
+            # Store the action and future for this active episode
+            cohort["pending_actions"][episode_idx] = action
+            cohort["pending_futures"][episode_idx] = future
+            
+            # Check if all ACTIVE episodes have submitted their actions
+            active_episodes = cohort["episodes"] - cohort["done_episodes"]
+            if set(cohort["pending_actions"].keys()) == active_episodes:
+                logging.info(f"[Step] All active episodes in Cohort {cohort_id} have submitted actions. Triggering step.")
+                
+                # --- Batch is ready, let's go! ---
+                step_actions = [""] * self.num_envs  # Default to no-op
+                
+                # Fill in actions for all cohort members
+                async with self.episode_to_bucket_lock:
+                    for ep_idx in cohort["episodes"]:
+                        bucket_idx = self.episode_to_bucket[ep_idx]
+                        if ep_idx in active_episodes:
+                            step_actions[bucket_idx] = cohort["pending_actions"][ep_idx]
+                
+                # Clear pending actions for the next turn
+                pending_futures_copy = dict(cohort["pending_futures"])
+                cohort["pending_actions"].clear()
+                cohort["pending_futures"].clear()
+
+                # Perform the actual step
+                obs, rewards, terminateds, truncateds, infos = self.vec_env.step(step_actions)
+
+                # Process results and check for newly done episodes
+                newly_done_episodes = set()
+                async with self.episode_to_bucket_lock:
+                    for ep_idx in active_episodes:
+                        bucket_idx = self.episode_to_bucket[ep_idx]
+                        is_done = terminateds[bucket_idx] or truncateds[bucket_idx]
+                        
+                        template_fn = TEMPLATE_FACTORY.get(PROMPT_TEMPLATE, apply_no_template)
+                        result_dict = {
+                            "next_state": template_fn(obs[bucket_idx]),
+                            "reward": rewards[bucket_idx],
+                            "score": rewards[bucket_idx],
+                            "done": is_done,
+                            "extra_info": {**infos[bucket_idx], "idx": ep_idx},
+                        }
+                        
+                        fut = pending_futures_copy[ep_idx]
+                        if not fut.done():
+                            fut.set_result(result_dict)
+                        
+                        if is_done:
+                            newly_done_episodes.add(ep_idx)
+                
+                cohort["done_episodes"].update(newly_done_episodes)
+
+                # Check if the entire cohort is now finished
+                if cohort["done_episodes"] == cohort["episodes"]:
+                    logging.info(f"[Step] Cohort {cohort_id} is fully done. Releasing all buckets.")
+                    async with self.cohort_lock, self.episode_to_bucket_lock:
+                        for ep_idx in cohort["episodes"]:
+                            bucket_to_release = self.episode_to_bucket.pop(ep_idx, None)
+                            if bucket_to_release is not None:
+                                await self.available_buckets.put(bucket_to_release)
+                            self.episode_to_cohort_id.pop(ep_idx, None)
+                        self.cohorts.pop(cohort_id, None)
+
+        return await future
 
 VECTORIZED_ENV = VectorizedGemEnv()
 
-EPISODE_RESULTS = {}
-WAITING_EPISODES = set()
-
-async def reset(extra_info: Dict[str, Any], **kwargs) -> str:
-    episode_id = str(extra_info.get('idx', random.randint(0, 999999)))
-    
+async def reset(extra_info: Dict[str, Any]) -> str:
+    episode_idx = extra_info['idx']
+    logging.info(f"[API] Reset called for episode {episode_idx}")
     try:
-        observation = VECTORIZED_ENV.reset_episode(episode_id, extra_info)
+        observation = await VECTORIZED_ENV.reset_episode(extra_info)
+        logging.info(f"[API] Reset completed for episode {episode_idx}")
         return observation
     except Exception as e:
-        logging.error(f"Error resetting episode {episode_id}: {e}")
+        logging.error(f"[API] Error resetting episode {episode_idx}: {e}")
         raise
 
-async def step(state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str, Any]:
-    episode_id = str(extra_info.get('idx', 0))
-    
+async def step(state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str, Any]:    
+    episode_idx = extra_info['idx']
+    # print(f"[API] Step called for episode {episode_idx}")
+    logging.info(f"[API] Step called for episode {episode_idx}")
     try:
-        all_ready = VECTORIZED_ENV.add_action(episode_id, action)
-        WAITING_EPISODES.add(episode_id)
-        
-        if not all_ready:
-            while not all_ready:
-                await asyncio.sleep(0.001)
-                all_ready = len(VECTORIZED_ENV.pending_actions) == len(VECTORIZED_ENV.active_episodes)
-        
-        if all_ready and episode_id in WAITING_EPISODES:
-            batch_results = VECTORIZED_ENV.execute_batch_step()
-            
-            for waiting_episode_id in WAITING_EPISODES:
-                if waiting_episode_id in batch_results:
-                    EPISODE_RESULTS[waiting_episode_id] = batch_results[waiting_episode_id]
-            
-            WAITING_EPISODES.clear()
-        
-        while episode_id not in EPISODE_RESULTS:
-            await asyncio.sleep(0.001)
-        
-        result = EPISODE_RESULTS.pop(episode_id)
-        
-        if "error" in result:
-            raise RuntimeError(result["error"])
+        result = await VECTORIZED_ENV.step_episode(state, action, extra_info)
+        logging.info(f"[API] Step completed for episode {episode_idx}")
         return result
-            
     except Exception as e:
-        WAITING_EPISODES.discard(episode_id)
-        EPISODE_RESULTS.pop(episode_id, None)
-        logging.error(f"Error stepping episode {episode_id}: {e}")
+        logging.error(f"[API] Error stepping episode {episode_idx}: {e}")
         raise
-
-def get_active_episodes() -> List[str]:
-    """Return list of currently active episode IDs."""
-    return list(VECTORIZED_ENV.active_episodes.keys())
-
-def get_pending_actions() -> Dict[str, str]:
-    """Return dictionary of pending actions by episode ID."""
-    return dict(VECTORIZED_ENV.pending_actions)
