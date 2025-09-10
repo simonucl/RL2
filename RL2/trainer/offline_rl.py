@@ -121,8 +121,15 @@ class OfflineRLTrainer(Trainer):
                 
                 # Compute log probabilities for KL if needed
                 if self.config.offline_rl.kl_coef > 0:
-                    tensor_dict = self.actor.compute_logps(tensor_dict, step)
-                    tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
+                    # Filter out non-sequence tensors before compute_logps
+                    logps_tensor_dict = {
+                        k: v for k, v in tensor_dict.items() 
+                        if k not in ["labels"]
+                    }
+                    logps_tensor_dict = self.actor.compute_logps(logps_tensor_dict, step)
+                    logps_tensor_dict = self.ref_actor.compute_logps(logps_tensor_dict, step)
+                    # Merge back the logps results
+                    tensor_dict.update(logps_tensor_dict)
                 
                 if dist.get_rank() == 0:
                     self.compute_advantages(tensor_dict, step)
