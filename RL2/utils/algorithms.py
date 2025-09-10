@@ -131,12 +131,11 @@ def compute_reinforce_adv(
 @action_extractor
 def compute_offline_advantages(tensor_dict, labels, label_scale):
     
-    batch_size = len(labels)
-    seq_length = tensor_dict["action_mask"].shape[-1]
+    batch_size, seq_length = tensor_dict["action_mask"].shape
     
     advantages = torch.zeros((batch_size, seq_length))
-    for i, label in enumerate(labels):
-        advantages[i] = label * label_scale
+    for i in range(batch_size):
+        advantages[i] = labels[i] * label_scale
     
     advantages = advantages * tensor_dict["action_mask"]
     return {"advantages": advantages}

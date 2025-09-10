@@ -1,3 +1,4 @@
+import torch
 from RL2.datasets import BaseDataset, pack_tensor_dicts
 
 class OfflineRLDataset(BaseDataset):
@@ -12,5 +13,5 @@ class OfflineRLDataset(BaseDataset):
     def collate_fn(self, tensor_dicts):
         labels = [tensor_dict.pop("label") for tensor_dict in tensor_dicts]
         packed_dict = pack_tensor_dicts(tensor_dicts)
-        packed_dict["labels"] = labels
+        packed_dict["labels"] = torch.tensor(labels)
         return packed_dict
