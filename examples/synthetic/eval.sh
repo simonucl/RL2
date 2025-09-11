@@ -1,13 +1,4 @@
-MODELS=(
-    # "meta-llama/Llama-3.2-1B-Instruct"
-    # "/root/RL2/ckpts/llama-3.2-1b-direct-inst-offline-rl"
-    # "/root/RL2/ckpts/llama-3.2-1b-sequence-inst-offline-rl"
-    # "/root/RL2/ckpts/llama-3.2-1b-vs-standard-inst-offline-rl"
-    # "/root/RL2/ckpts/llama-3.2-1b-combined-inst-offline-rl"
-    # "/root/RL2/ckpts/llama-3.2-1b-direct-inst-offline-rl-kl-0.2"
-    # "/root/RL2/ckpts/llama-3.2-1b-direct-inst-offline-rl-kl-0.01"
-    "/root/RL2/ckpts/llama-3.2-1b-direct-inst-offline-rl"
-)
+MODEL=$1
 
 EVAL_ENGINE="vllm"
 
@@ -20,7 +11,7 @@ start_server() {
     echo "Starting $EVAL_ENGINE server..."
     
     if [ "$EVAL_ENGINE" == "vllm" ]; then
-        vllm serve $MODEL_NAME \
+        vllm serve $MODEL \
             --port $SERVER_PORT --max-model-len 32768 \
             --enable-prefix-caching --dtype bfloat16 > vllm.log 2>&1 &
         SERVER_PID=$!
@@ -62,16 +53,14 @@ start_server() {
 stop_server() {
     echo "Stopping $EVAL_ENGINE server..."
     if [ "$EVAL_ENGINE" == "vllm" ]; then
-        pkill -f "vllm serve $MODEL_NAME --port $SERVER_PORT" || true
+        pkill -f "vllm serve $MODEL --port $SERVER_PORT" || true
     elif [ "$EVAL_ENGINE" == "sglang" ]; then
-        pkill -f "python -m sglang.launch_server --model-path $MODEL_NAME --host $SERVER_HOST --dp $DATA_PARALLEL_SIZE --port $SERVER_PORT" || true
+        pkill -f "python -m sglang.launch_server --model-path $MODEL --host $SERVER_HOST --dp $DATA_PARALLEL_SIZE --port $SERVER_PORT" || true
     fi
     sleep 2
 }
 
-for MODEL_NAME in "${MODELS[@]}"; do
-    start_server
-    python evals/gsm.py --model $MODEL_NAME --vllm_base_url http://localhost:8000
-    stop_server
-    sleep 10
-done
+start_server
+python evals/gsm.py --model $MODEL --vllm_base_url http://localhost:8000 --repeat 5
+stop_server
+sleep 10

@@ -6,6 +6,8 @@ class OfflineRLDataset(BaseDataset):
     def __init__(self, config, tokenizer):
         super().__init__(config, tokenizer)
         
+        # Shuffle the dataset
+        self.dataset = self.dataset.shuffle()
         # Filter dataset based on label threshold if specified
         if hasattr(config, 'label_threshold') and config.label_threshold is not None:
             original_size = len(self.dataset)
