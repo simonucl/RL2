@@ -109,7 +109,10 @@ class Rollout(Worker):
         
     async def rollout(self, ex, train):
 
-        state_text = ex.get("prompt") or await self.env.reset(extra_info=ex.get("extra_info", {}))
+        state_text = (
+            ex["prompt"] if "prompt" in ex else
+            await self.env.reset(ex["extra_info"])
+        )
         state_dict = self.initialize_state_dict(state_text)
         env_response = {"extra_info": ex["extra_info"]}
         tensor_dicts = []
@@ -209,9 +212,9 @@ class Rollout(Worker):
 
             if dist.get_rank() == 0:
 
-                if self.config.dynamic_filtering:
+                group_size = self.config.responses_per_prompt
+                if group_size > 1 and self.config.dynamic_filtering:
 
-                    group_size = self.config.responses_per_prompt
                     rewards = torch.FloatTensor([
                         sum([td["rewards"].sum().item() for td in tensor_dicts])
                         for tensor_dicts in all_tensor_dicts
@@ -240,7 +243,7 @@ class Rollout(Worker):
         return None, None
         
     @time_logger("update_rollout")
-    def update(self, state_dict, step):
+    def update(self, actor, step):
 
         torch.cuda.empty_cache()
         dist.barrier()
@@ -248,7 +251,7 @@ class Rollout(Worker):
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.llm.resume_memory_occupation()
         
-        for idx, (name, tensor) in enumerate(state_dict.items()):
+        for idx, (name, tensor) in enumerate(actor.state_dict.items()):
             tensor = tensor.to(torch.cuda.current_device())
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
@@ -267,7 +270,7 @@ class Rollout(Worker):
                     named_tensors=[(
                         name, LocalSerializedTensor(values=serialized_tensors)
                     )],
-                    flush_cache=(idx == len(state_dict) - 1)
+                    flush_cache=(idx == len(actor.state_dict) - 1)
                 )
-        state_dict.clear()
+        actor.state_dict.clear()
         dist.barrier()

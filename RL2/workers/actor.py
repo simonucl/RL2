@@ -91,9 +91,8 @@ class Actor(Worker):
     @data_manager(pack_minibatches=True)
     def update(self, batches, step: int):
         if step < self.config.freeze_steps:
-            return get_state_dict(
-                self.model, full_state_dict=False
-            )
+            self.state_dict = get_state_dict(self)
+            return
 
         self.model.train()
         tbar = progress_bar(
@@ -165,6 +164,4 @@ class Actor(Worker):
 
         rank0_log(metrics, step)
 
-        return get_state_dict(
-            self.model, full_state_dict=False
-        )
+        self.state_dict = get_state_dict(self)

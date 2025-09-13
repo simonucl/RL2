@@ -4,7 +4,10 @@ import torch.distributed as dist
 from transformers import AutoTokenizer
 from RL2.utils.data_parallelism import prepare_dp_model
 from RL2.utils.tensor_parallelism import prepare_tp_model
-from RL2.utils.offloading import load_model_to_device, load_optimizer_to_device
+from RL2.utils.offloading import (
+    load_model_to_device,
+    optimizer_offloading_manager
+)
 
 class Worker:
 
@@ -64,19 +67,14 @@ class Worker:
         # https://github.com/ChenmienTan/RL2/issues/11
         (self.dp_size * self.config.sp_size * loss).backward()
     
+    @optimizer_offloading_manager
     def optimizer_step(self):
 
         grad_norm = clip_grad_norm_(
             self.model.parameters(),
             max_norm=self.config.max_grad_norm
         )
-
-        load_optimizer_to_device(
-            self, torch.cuda.current_device()
-        )
         self.optimizer.step()
         self.optimizer.zero_grad()
         self.scheduler.step()
-        load_optimizer_to_device(self, "cpu")
-
         return grad_norm.item()

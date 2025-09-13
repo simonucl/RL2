@@ -29,6 +29,8 @@ class PPOTrainer(Trainer):
         if config.adv.estimator == "gae":
             self.critic = Critic(config.critic)
             self.critic.scheduler = self.prepare_scheduler(self.critic)
+        else:
+            self.critic = None
         self.rollout = Rollout(config.rollout)    
 
     def get_dataloader(self, train: bool):
@@ -83,10 +85,7 @@ class PPOTrainer(Trainer):
     def train(self):
 
         step = load_ckpt(
-            self,
-            (self.actor, self.critic)
-            if self.config.adv.estimator == "gae"
-            else (self.actor,)
+            self, (self.actor, self.critic, self.rollout)
         )
         for epoch in range(
             step // len(self.train_dataloader),
@@ -114,19 +113,15 @@ class PPOTrainer(Trainer):
                         self.compute_approx_kl(tensor_dict, step)
                     self.compute_advantages(tensor_dict, cu_seqs, step)
 
-                state_dict = self.actor.update(tensor_dict, step)
+                self.actor.update(tensor_dict, step)
                 if self.config.adv.estimator == "gae":
                     self.critic.update(tensor_dict, step)
                 save_ckpt(
-                    self,
-                    (self.actor, self.critic)
-                    if self.config.adv.estimator == "gae"
-                    else (self.actor,),
-                    step
+                    self, (self.actor, self.critic), step
                 )
 
-                self.rollout.update(state_dict, step)
-                if step % self.config.trainer.test_freq == 0:
+                self.rollout.update(self.actor, step)
+                if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)
 

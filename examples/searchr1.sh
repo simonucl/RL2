@@ -29,10 +29,7 @@ torchrun \
     actor.model_name=Qwen/Qwen2.5-3B \
     actor.max_length_per_device=8192 \
     rollout.train_sampling_params.max_new_tokens=512 \
-    +"rollout.train_sampling_params.stop=['</search>','</answer>']" \
-    +rollout.train_sampling_params.no_stop_trim=true \
-    +"rollout.test_sampling_params.stop=['</search>','</answer>']" \
-    +rollout.test_sampling_params.no_stop_trim=true \
+    "rollout.train_sampling_params.stop=['</search>','</answer>']" \
     rollout.max_turns=2 \
     rollout.env_path=envs/searchr1.py \
     trainer.project=SearchR1 \

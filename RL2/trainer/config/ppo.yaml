@@ -1,10 +1,11 @@
 train_data:
   path: null
   prompts_per_rollout: null
-  responses_per_prompt: null
+  responses_per_prompt: 1
 
 test_data:
   path: null
+  prompts_per_rollout: null
   responses_per_prompt: 1
   
 actor:
@@ -23,7 +24,7 @@ actor:
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
-  tis_coef: 0.0
+  tis_coef: 2.0
   scheduler: constant
   warmup_ratio: 0.1
   freeze_steps: 0
@@ -49,9 +50,13 @@ rollout:
   train_sampling_params:
     temperature: 1.0
     max_new_tokens: null
+    stop: null
+    no_stop_trim: true
   test_sampling_params:
     temperature: 0.0
     max_new_tokens: ${rollout.train_sampling_params.max_new_tokens}
+    stop: ${rollout.train_sampling_params.stop}
+    no_stop_trim: ${rollout.train_sampling_params.no_stop_trim}
   max_turns: 1
   env_path: null
   dynamic_filtering: true
@@ -75,7 +80,7 @@ critic:
   sp_size: ${actor.sp_size}
   max_length_per_device: ${actor.max_length_per_device}
   max_inference_length_per_device: ${critic.max_length_per_device}
-  update_per_rollout: 12
+  update_per_rollout: ${actor.update_per_rollout}
   clip: 0.5
   avg_level: ${actor.avg_level}
   lr: 5e-6

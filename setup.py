@@ -5,9 +5,10 @@ def read_requirements(filename):
         return [line.strip() for line in f if line.strip() and not line.startswith('#')]
 
 setup(
-    name="RL2",
-    version="0.1.0",
+    name="rl-square",
+    version="0.0.1.post1",
     packages=find_packages(),
+    include_package_data=True,
     install_requires=read_requirements('requirements.txt'),
     python_requires='>=3.10',
     author="Chenmien Tan, Simon Yu, Lanbo Lin, Ze Zhang, Yuanwu Xu, Chenhao Jiang, Tianyuan Yang, Sicong Xie, Guannan Zhang",

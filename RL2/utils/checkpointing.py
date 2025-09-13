@@ -10,20 +10,21 @@ from torch.distributed.checkpoint.state_dict import (
 from transformers import AutoModelForSequenceClassification
 from RL2.utils.offloading import model_offloading_manager
 
-def get_state_dict(model, full_state_dict: bool):
+@model_offloading_manager
+def get_state_dict(worker, full_state_dict=False):
 
     options = StateDictOptions(
         full_state_dict=full_state_dict,
         cpu_offload=True
     )
-    return get_model_state_dict(model, options=options)
+    return get_model_state_dict(worker.model, options=options)
 
-@model_offloading_manager
 def get_worker_ckpt(worker):
+    
+    if not hasattr(worker, "state_dict"):
+        worker.state_dict = get_state_dict(worker)
     return {
-        "model": get_state_dict(
-            worker.model, full_state_dict=False
-        ),
+        "model": worker.state_dict,
         "optimizer": worker.optimizer.state_dict(),
         "scheduler": worker.scheduler.state_dict()
     }
@@ -36,7 +37,8 @@ def get_ckpt(trainer, workers, step):
     }
 
     for idx, worker in enumerate(workers):
-        ckpt[f"worker{idx}"] = get_worker_ckpt(worker)
+        if hasattr(worker, "model"):
+            ckpt[f"worker{idx}"] = get_worker_ckpt(worker)
 
     return ckpt
 
@@ -51,11 +53,11 @@ def load_worker_ckpt(worker, ckpt):
 
 def load_ckpt(trainer, workers):
 
-    if trainer.config.trainer.load_ckpt_from is None:
+    checkpoint_id = trainer.config.trainer.load_ckpt_from
+    
+    if checkpoint_id is None:
         return 0
 
-    ckpt = get_ckpt(trainer, workers, 0)
-    checkpoint_id = trainer.config.trainer.load_ckpt_from
     if checkpoint_id == "latest":
         save_dirs = glob.glob(f"{trainer.config.trainer.save_dir}/step*")
         if not save_dirs:
@@ -64,10 +66,16 @@ def load_ckpt(trainer, workers):
             save_dirs, key=lambda dir: int(dir.split("/step")[-1])
         )
     
-    dcp.load(ckpt, checkpoint_id)
+    ckpt = get_ckpt(trainer, workers, 0)
+    dcp.load(ckpt, checkpoint_id=checkpoint_id)
     trainer.train_dataloader.load_state_dict(ckpt["dataloader"])
     for idx, worker in enumerate(workers):
-        load_worker_ckpt(worker, ckpt[f"worker{idx}"])
+        if hasattr(worker, "model"):
+            load_worker_ckpt(worker, ckpt[f"worker{idx}"])
+        if hasattr(worker, "llm"):
+            if worker.device_mesh["tp"].get_local_rank() == 0:
+                worker.llm.release_memory_occupation()
+            worker.update(workers[0], ckpt["step"])
 
     return ckpt["step"]
 
@@ -87,7 +95,7 @@ def save_model(trainer, worker, rm=False):
     if trainer.config.trainer.save_freq is not None:
         save_dir += "/latest"
     state_dict = get_state_dict(
-        worker.model, full_state_dict=True
+        worker, full_state_dict=True
     )
     if dist.get_rank() == 0:
 
