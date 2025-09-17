@@ -164,28 +164,206 @@ class Rollout(Worker):
 
         return tensor_dicts, metric
 
+    async def vectorized_rollout(self, num_episodes, train):
+        """
+        Vectorized rollout for environments that support batch operations.
+        Uses batched generation with SGLang for improved efficiency.
+
+        Args:
+            num_episodes: Target number of episodes to collect
+            train: Whether this is training or evaluation
+
+        Returns:
+            Tuple of (all_tensor_dicts, metrics)
+        """
+        import importlib.util
+
+        # Load vectorized environment
+        spec = importlib.util.spec_from_file_location("vec_env", self.config.env_path)
+        env_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(env_module)
+
+        # Get batch size from vectorized environment
+        batch_size = getattr(env_module, 'NUM_ENVS', 16)
+        num_batches = (num_episodes + batch_size - 1) // batch_size
+
+        all_tensor_dicts = []
+        all_metrics = defaultdict(list)
+
+        for batch_idx in range(num_batches):
+            # Reset environments to get initial observations
+            batch_observations = await env_module.reset(None)
+            if isinstance(batch_observations, str):
+                batch_observations = [batch_observations] * batch_size
+
+            batch_state_dicts = []
+            batch_env_responses = []
+            batch_tensor_dicts = []
+            batch_metrics = defaultdict(list)
+            batch_scores = []
+            episode_completed = [False] * batch_size  # Track which episodes have completed
+            batch_state_texts = []  # Track state text for each environment
+
+            # Initialize state dicts for each environment in the batch
+            for obs in batch_observations:
+                state_dict = self.initialize_state_dict(obs)
+                batch_state_dicts.append(state_dict)
+                batch_env_responses.append({"extra_info": None})
+                batch_scores.append([])
+                batch_state_texts.append(obs)
+
+            for turn in range(1, self.config.max_turns + 1):
+                # Prepare batch input_ids for batched generation (all envs)
+                batch_input_ids = [batch_state_dicts[i]["states"] for i in range(batch_size)]
+
+                # Batched generation using SGLang
+                llm_responses = await self.llm.async_generate(
+                    input_ids=batch_input_ids,
+                    sampling_params=self.train_sampling_params if train else self.test_sampling_params,
+                    return_logprob=True
+                )
+
+                # Handle case where response is not a list (single response)
+                if not isinstance(llm_responses, list):
+                    llm_responses = [llm_responses]
+
+                # Extract actions for batch environment step (all envs)
+                batch_actions = [response["text"] for response in llm_responses]
+                batch_extra_info = [batch_env_responses[i]["extra_info"] for i in range(batch_size)]
+
+                # Batch environment step for all environments
+                env_responses = await env_module.step(
+                    batch_observations, batch_actions, batch_extra_info
+                )
+
+                # Process responses for each environment
+                for i, llm_response in enumerate(llm_responses):
+                    state_dict = batch_state_dicts[i]
+
+                    env_response = {
+                        "next_state": env_responses["next_state"][i],
+                        "reward": env_responses["reward"][i],
+                        "done": env_responses["done"][i],
+                        "extra_info": env_responses["extra_info"][i]
+                    }
+
+                    meta_info = llm_response["meta_info"]
+                    logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
+
+                    # Update state dict
+                    state_dict["states"].extend(action)
+                    state_dict["actions"].extend(action)
+                    state_dict["action_mask"].extend(len(action) * [1])
+                    state_dict["logps"].extend(logp)
+                    state_dict["rewards"].extend((len(action) - 1) * [0] + [env_response["reward"]])
+
+                    # Collect metrics
+                    batch_metrics["response_length"].append(meta_info["completion_tokens"])
+                    batch_metrics["length_clip_ratio"].append(
+                        meta_info["finish_reason"]["type"] == "length"
+                    )
+                    batch_scores[i].append(env_response["reward"])
+
+                    action_text = batch_actions[i]
+                    state_text = batch_state_texts[i]
+
+                    # Check if episode is done
+                    if turn == self.config.max_turns or env_response["done"]:
+                        # Only append to batch_tensor_dicts if this episode hasn't completed before
+                        if not episode_completed[i]:
+                            batch_tensor_dicts.append(self.get_tensor_dict(state_dict))
+                            episode_completed[i] = True
+
+                        # Re-initialize state dict for next episode
+                        batch_state_dicts[i] = self.initialize_state_dict(env_response["next_state"])
+                        batch_scores[i] = []  # Reset scores for new episode
+                        batch_state_texts[i] = env_response["next_state"]
+                    else:
+                        # Handle state transitions with delta updates
+                        if env_response["next_state"].startswith(state_text + action_text):
+                            state_dict_delta = self.initialize_state_dict(
+                                env_response["next_state"][len(state_text + action_text):]
+                            )
+                            for k, v in state_dict_delta.items():
+                                state_dict[k].extend(v)
+                        else:
+                            # Complete current trajectory and start new one
+                            if not episode_completed[i]:
+                                batch_tensor_dicts.append(self.get_tensor_dict(state_dict))
+                                episode_completed[i] = True
+                            batch_state_dicts[i] = self.initialize_state_dict(env_response["next_state"])
+
+                        batch_state_texts[i] = env_response["next_state"]
+                        # Update observation for next turn
+                        batch_observations[i] = env_response["next_state"]
+
+            # Collect episode metrics
+            for i, scores in enumerate(batch_scores):
+                batch_metrics["n_turns"].append(turn)
+                batch_metrics["scores"].append(sum(scores))
+
+            # Add batch results to overall collection
+            all_tensor_dicts.extend(batch_tensor_dicts)
+            for key, values in batch_metrics.items():
+                all_metrics[key].extend(values)
+
+        return all_tensor_dicts, dict(all_metrics)
+
+    def is_vectorized_env(self):
+        """Check if the environment is vectorized by examining env_path."""
+        if not hasattr(self.config, 'env_path') or self.config.env_path is None:
+            return False
+
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("env_check", self.config.env_path)
+            env_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(env_module)
+
+            # Check for vectorized environment markers
+            return (hasattr(env_module, 'NUM_ENVS') and
+                    hasattr(env_module, 'vec_env') and
+                    hasattr(env_module.vec_env, 'num_envs'))
+        except:
+            return False
+
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
 
         # The data is distributed from rank 0 before each worker operation
         # and gathered before the next operation, which facilitates to do
-        # model-agnostic operations, e.g., computing advantages, globally 
+        # model-agnostic operations, e.g., computing advantages, globally
         # and guarantees the load balancing across all model computations.
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            data_list = split_and_scatter_list(
-                data_list, self.device_mesh["dp"]
-            )
-            loop = asyncio.get_event_loop()
-            outputs = loop.run_until_complete(
-                tqdm.gather(
-                    *(self.rollout(ex, train) for ex in data_list),
-                    desc="Rollout",
-                    position=1,
-                    leave=False,
-                    disable=(dist.get_rank() != 0)
+            # Check if we're using vectorized environments
+            if self.is_vectorized_env():
+                # For vectorized environments, ignore data_list and collect episodes directly
+                total_target_episodes = getattr(self.config, 'prompts_per_rollout', len(data_list))
+                # Divide episodes across devices
+                target_episodes = total_target_episodes // self.device_mesh["dp"].size()
+
+                loop = asyncio.get_event_loop()
+                all_tensor_dicts, metrics = loop.run_until_complete(
+                    self.vectorized_rollout(target_episodes, train)
                 )
-            )
+                outputs = [(all_tensor_dicts, metrics)]
+            else:
+                # Traditional individual rollout processing
+                data_list = split_and_scatter_list(
+                    data_list, self.device_mesh["dp"]
+                )
+                loop = asyncio.get_event_loop()
+                outputs = loop.run_until_complete(
+                    tqdm.gather(
+                        *(self.rollout(ex, train) for ex in data_list),
+                        desc="Rollout",
+                        position=1,
+                        leave=False,
+                        disable=(dist.get_rank() != 0)
+                    )
+                )
+
             if train:
                 # If test, llm will soon be called again. See `Trainer.train`.
                 self.llm.release_memory_occupation()
@@ -194,34 +372,54 @@ class Rollout(Worker):
 
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            all_tensor_dicts, metrics = map(list, zip(*outputs))
+            if self.is_vectorized_env():
+                # Handle vectorized environment outputs
+                all_tensor_dicts, metrics = outputs[0]
 
-            suffix = "train" if train else "test"
-            metrics = {
-                f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
-                for k in metrics[0].keys()
-            }
-            gather_and_log(metrics, self.device_mesh["dp"], step)
+                suffix = "train" if train else "test"
+                formatted_metrics = {
+                    f"{k}/{suffix}": v if isinstance(v, list) else [v]
+                    for k, v in metrics.items()
+                }
+                gather_and_log(formatted_metrics, self.device_mesh["dp"], step)
 
-            if not train:
-                return
+                if not train:
+                    return
 
-            all_tensor_dicts = gather_and_concat_list(
-                all_tensor_dicts, self.device_mesh["dp"]
+                # For vectorized environments, all_tensor_dicts is already a flat list
+                # Reshape into the expected format
+                all_tensor_dicts_grouped = [[td] for td in all_tensor_dicts]
+
+            else:
+                # Traditional processing
+                all_tensor_dicts_grouped, metrics = map(list, zip(*outputs))
+
+                suffix = "train" if train else "test"
+                metrics = {
+                    f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
+                    for k in metrics[0].keys()
+                }
+                gather_and_log(metrics, self.device_mesh["dp"], step)
+
+                if not train:
+                    return
+
+            all_tensor_dicts_grouped = gather_and_concat_list(
+                all_tensor_dicts_grouped, self.device_mesh["dp"]
             )
 
             if dist.get_rank() == 0:
 
                 group_size = self.config.responses_per_prompt
-                if group_size > 1 and self.config.dynamic_filtering:
+                if group_size > 1 and self.config.dynamic_filtering and not self.is_vectorized_env():
 
                     rewards = torch.FloatTensor([
                         sum([td["rewards"].sum().item() for td in tensor_dicts])
-                        for tensor_dicts in all_tensor_dicts
+                        for tensor_dicts in all_tensor_dicts_grouped
                     ]).view(-1, group_size)
                     are_filtered = rewards.std(-1) == 0
-                    all_tensor_dicts = sum([
-                        all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
+                    all_tensor_dicts_grouped = sum([
+                        all_tensor_dicts_grouped[idx * group_size:(idx + 1) * group_size]
                         for idx, is_filtered in enumerate(are_filtered)
                         if not is_filtered
                     ], [])
@@ -229,15 +427,15 @@ class Rollout(Worker):
                         "dynamic_filtering_ratio": are_filtered.float().mean().item()
                     }, step=step)
 
-                tensor_dicts = sum(all_tensor_dicts, [])
+                tensor_dicts = sum(all_tensor_dicts_grouped, [])
                 tensor_dict = pack_tensor_dicts(tensor_dicts)
                 seqs = torch.LongTensor([
-                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts
+                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts_grouped
                 ])
                 cu_seqs = torch.cumsum(
                     torch.cat((torch.LongTensor([0]), seqs)), dim=0
                 )
-                
+
                 return tensor_dict, cu_seqs
 
         return None, None

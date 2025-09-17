@@ -2,9 +2,9 @@ import asyncio
 import gem
 from gem.wrappers.wrapper_factory import get_wrapper_fns
 
-NUM_ENVS = 16
-ENV_ID = "rg:letter_counting"
-WRAPPERS = ""
+NUM_ENVS = 4
+ENV_ID = "game:Sudoku-v0-random"
+WRAPPERS = "concat"
 PROMPT_TEMPLATE = "qwen3_general"
 ENV_POOL = []
 ENV_LOCKS = []
@@ -42,42 +42,27 @@ TEMPLATE_FACTORY = {
     "code": apply_code_template,
 }
     
-for idx in range(NUM_ENVS):
-    env = gem.make(env_id=ENV_ID, seed=233 + idx)
-    wrappers = get_wrapper_fns(WRAPPERS, tokenizer=None)
-    for wrapper in wrappers:
-        env = wrapper(env)
-    ENV_POOL.append(env)
-    ENV_LOCKS.append(asyncio.Lock())
+vec_env = gem.make_vec(
+    [ENV_ID] * NUM_ENVS,
+    vec_kwargs=[{"seed": 233 + idx} for idx in range(NUM_ENVS)],
+    wrappers=get_wrapper_fns(WRAPPERS, tokenizer=None),
+    async_mode=True
+)
 
 async def reset(extra_info):
+    """Reset all environments and return initial observations with templates applied."""
+    states, _ = vec_env.reset()
+    return [TEMPLATE_FACTORY[PROMPT_TEMPLATE](state) for state in states]
 
-    env_idx = extra_info["idx"] % NUM_ENVS
-    await ENV_LOCKS[env_idx].acquire()
-    state, _ = ENV_POOL[env_idx].reset()
-    return TEMPLATE_FACTORY[PROMPT_TEMPLATE](state)
-
-async def step(state, action, extra_info):
-
-    env_idx = extra_info["idx"] % NUM_ENVS
-
-    (
-        next_state,
-        reward,
-        terminated,
-        truncated,
-        _
-    ) = ENV_POOL[env_idx].step(action)
-    next_state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](next_state)
-    done = terminated or truncated
-    
-    if done:
-        ENV_LOCKS[env_idx].release()
-
+async def step(states, actions, extra_info):
+    """Step all environments with given actions and return batch results."""
+    next_states, rewards, terminated, truncated, _ = vec_env.step(actions)
+    # Apply templates to next states for consistency
+    templated_next_states = [TEMPLATE_FACTORY[PROMPT_TEMPLATE](state) for state in next_states]
+    done = terminated | truncated
     return {
-        "next_state": next_state,
-        "reward": reward,
-        "score": reward,
+        "next_state": templated_next_states,
+        "reward": rewards,
         "done": done,
-        "extra_info": extra_info
+        "extra_info": extra_info,
     }
