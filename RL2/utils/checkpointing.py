@@ -72,7 +72,7 @@ def load_ckpt(trainer, workers):
     for idx, worker in enumerate(workers):
         if hasattr(worker, "model"):
             load_worker_ckpt(worker, ckpt[f"worker{idx}"])
-        if hasattr(worker, "llm"):
+        elif worker is not None:
             if worker.device_mesh["tp"].get_local_rank() == 0:
                 worker.llm.release_memory_occupation()
             worker.update(workers[0], ckpt["step"])
