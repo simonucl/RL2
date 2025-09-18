@@ -96,8 +96,8 @@ class BaseDataset(Dataset):
         )
         
         states = prompt + response
-        actions = len(states) * [0] + response
-        action_mask = len(states) * [0] + len(response) * [1]
+        actions = len(prompt) * [0] + response
+        action_mask = len(prompt) * [0] + len(response) * [1]
         
         return get_tensor_dict(
             states, actions, action_mask, self.config.max_length, rm
