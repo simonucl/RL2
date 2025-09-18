@@ -6,8 +6,7 @@ import torch.distributed as dist
 import transformers
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.modeling_flash_attention_utils import (
-    _flash_supports_window_size,
-    is_flash_attn_greater_or_equal
+    is_flash_attn_greater_or_equal_2_10
 )
 from ring_flash_attn.llama3_flash_attn_varlen import (
     llama3_flash_attn_varlen_func,
@@ -36,11 +35,11 @@ def _flash_attention_forward(
     max_length_q: Optional[int] = None,
     max_length_k: Optional[int] = None,
     target_dtype: Optional[torch.dtype] = None,
+    attn_implementation: Optional[str] = None,
     **kwargs
 ):
     use_sliding_windows = (
-        _flash_supports_window_size
-        and sliding_window is not None
+        sliding_window is not None
         and key_states.shape[1] > sliding_window
     )
     flash_kwargs = (
@@ -49,7 +48,7 @@ def _flash_attention_forward(
         else {}
     )
 
-    if is_flash_attn_greater_or_equal("2.4.1"):
+    if is_flash_attn_greater_or_equal_2_10:
         if deterministic is None:
             deterministic = (
                 os.environ.get("FLASH_ATTENTION_DETERMINISTIC", "0") == "1"
