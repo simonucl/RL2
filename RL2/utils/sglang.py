@@ -29,8 +29,7 @@ def launch_server_process(server_args):
         **server_args
     )
     process = multiprocessing.Process(
-        target=launch_server,
-        args=(server_args,)
+        target=launch_server, args=(server_args,)
     )
     process.start()
 
@@ -42,12 +41,10 @@ def launch_server_process(server_args):
                     f"{server_args.url()}/health_generate"
                 )
                 if response.status_code == 200:
-                    break
+                    return server_args.url()
             except:
                 pass
             time.sleep(1)
-
-    return server_args.url()
 
 def launch_router_process(worker_urls):
 
@@ -62,4 +59,4 @@ def launch_router_process(worker_urls):
     process.start()
     time.sleep(3)
     assert process.is_alive()
-    return router_args.host, router_args.port
+    return f"http://{router_args.host}:{router_args.port}"

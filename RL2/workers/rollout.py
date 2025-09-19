@@ -46,7 +46,7 @@ class Rollout:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
-            self.router_host, self.router_port = launch_router_process(worker_urls)
+            self.router_url = launch_router_process(worker_urls)
 
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params
@@ -115,7 +115,7 @@ class Rollout:
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"http://{self.router_host}:{self.router_port}/generate",
+                f"{self.router_url}/generate",
                 json=payload
             ) as response:
                 return await response.json(content_type=None)
