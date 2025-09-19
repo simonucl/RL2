@@ -28,7 +28,7 @@ class Rollout(Worker):
         self.prepare_environment_variables()
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            self.worker_url = launch_server_process(config)
+            self.worker_url = launch_server_process(config.server_args)
             worker_urls = [
                 None for _ in range(self.device_mesh["dp"].size())
             ] if self.device_mesh["dp"].get_local_rank() == 0 else None
@@ -56,13 +56,13 @@ class Rollout(Worker):
     def prepare_device_mesh(self):
 
         world_size = dist.get_world_size()
-        assert world_size % self.config.tp_size == 0, \
-            f"World_size {world_size} must be divisible by tp_size {self.config.tp_size}."
-        self.dp_size = world_size // self.config.tp_size
+        assert world_size % self.config.server_args.tp_size == 0, \
+            f"World_size {world_size} must be divisible by tp_size {self.config.server_args.tp_size}."
+        self.dp_size = world_size // self.config.server_args.tp_size
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cpu",
             mesh_dim_names=("dp", "tp"),
-            mesh_shape=(self.dp_size, self.config.tp_size)
+            mesh_shape=(self.dp_size, self.config.server_args.tp_size)
         )
 
     def prepare_environment_variables(self):

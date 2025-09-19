@@ -1,3 +1,4 @@
+from omegaconf import OmegaConf
 import time
 import socket
 import requests
@@ -18,16 +19,14 @@ def get_available_port():
         s.listen(1)
         return s.getsockname()[1]
 
-def launch_server_process(config):
+def launch_server_process(server_args):
 
+    server_args = OmegaConf.to_container(server_args)
     server_args = ServerArgs(
-        model_path=config.model_name,
-        dtype=config.dtype,
-        tp_size=config.tp_size,
-        mem_fraction_static=config.gpu_memory_utilization,
         enable_memory_saver=True,
         host=get_host(),
-        port=get_available_port()
+        port=get_available_port(),
+        **server_args
     )
     process = multiprocessing.Process(
         target=launch_server,

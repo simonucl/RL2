@@ -20,11 +20,11 @@ actor:
   temperature: ${rollout.train_sampling_params.temperature}
   update_per_rollout: 1
   clip: 0.2
+  tis_coef: 2.0
   avg_level: token
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
-  tis_coef: 2.0
   scheduler: constant
   warmup_ratio: 0.1
   freeze_steps: 0
@@ -42,10 +42,11 @@ actor:
     coef: 0.0
 
 rollout:
-  model_name: ${actor.model_name}
-  dtype: bfloat16
-  tp_size: 1
-  gpu_memory_utilization: 0.6
+  server_args:
+    model_path: ${actor.model_name}
+    dtype: bfloat16
+    tp_size: 1
+    mem_fraction_static: 0.6
   responses_per_prompt: ${train_data.responses_per_prompt}
   train_sampling_params:
     temperature: 1.0
