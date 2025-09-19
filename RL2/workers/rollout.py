@@ -42,7 +42,7 @@ class Rollout(Worker):
         if dist.get_rank() == 0:
 
             self.prepare_environment()
-            launch_router_process(worker_urls)
+            self.router_host, self.router_port = launch_router_process(worker_urls)
 
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params
@@ -111,7 +111,7 @@ class Rollout(Worker):
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"http://localhost:20000/generate",
+                f"http://{self.router_host}:{self.router_port}/generate",
                 json=payload
             ) as response:
                 return await response.json(content_type=None)

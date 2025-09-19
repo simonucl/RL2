@@ -1,10 +1,22 @@
 import time
+import socket
 import requests
 import multiprocessing
-import torch.distributed as dist
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang_router.launch_router import RouterArgs, launch_router
+
+def get_host():
+
+    hostname = socket.gethostname()
+    return socket.gethostbyname(hostname)
+
+def get_available_port():
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        return s.getsockname()[1]
 
 def launch_server_process(config):
 
@@ -14,7 +26,8 @@ def launch_server_process(config):
         tp_size=config.tp_size,
         mem_fraction_static=config.gpu_memory_utilization,
         enable_memory_saver=True,
-        port=config.base_port + dist.get_rank()
+        host=get_host(),
+        port=get_available_port()
     )
     process = multiprocessing.Process(
         target=launch_server,
@@ -40,8 +53,9 @@ def launch_server_process(config):
 def launch_router_process(worker_urls):
 
     router_args = RouterArgs(
-        port=20000,
         worker_urls=worker_urls,
+        host=get_host(),
+        port=get_available_port()
     )
     process = multiprocessing.Process(
         target=launch_router, args=(router_args,)
@@ -49,3 +63,4 @@ def launch_router_process(worker_urls):
     process.start()
     time.sleep(3)
     assert process.is_alive()
+    return router_args.host, router_args.port
