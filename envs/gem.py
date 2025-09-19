@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import gem
 from gem.wrappers.wrapper_factory import get_wrapper_fns
 
@@ -48,18 +49,25 @@ for idx in range(NUM_ENVS):
     for wrapper in wrappers:
         env = wrapper(env)
     ENV_POOL.append(env)
-    ENV_LOCKS.append(asyncio.Lock())
+
+AVAILABLE_ENVS = deque(range(NUM_ENVS))
+SEMAPHORE = asyncio.Semaphore(NUM_ENVS)
+LOCK = asyncio.Lock()
 
 async def reset(extra_info):
 
-    env_idx = extra_info["idx"] % NUM_ENVS
-    await ENV_LOCKS[env_idx].acquire()
+    await SEMAPHORE.acquire()
+    async with LOCK:
+        env_idx = AVAILABLE_ENVS.popleft()
+    
     state, _ = ENV_POOL[env_idx].reset()
-    return TEMPLATE_FACTORY[PROMPT_TEMPLATE](state)
+    state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](state)
+    extra_info["env_idx"] = env_idx
+    return state, extra_info
 
 async def step(state, action, extra_info):
 
-    env_idx = extra_info["idx"] % NUM_ENVS
+    env_idx = extra_info["env_idx"]
 
     (
         next_state,
@@ -72,7 +80,9 @@ async def step(state, action, extra_info):
     done = terminated or truncated
     
     if done:
-        ENV_LOCKS[env_idx].release()
+        async with LOCK:
+            AVAILABLE_ENVS.append(env_idx)
+        SEMAPHORE.release()
 
     return {
         "next_state": next_state,
