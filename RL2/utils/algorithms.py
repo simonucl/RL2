@@ -1,6 +1,6 @@
-import functools
 import torch
 from RL2.datasets import pack_tensor_dicts
+from RL2.utils.logging import time_logger
 
 def compute_approx_kl(
     logps: torch.Tensor,
@@ -20,44 +20,6 @@ def compute_approx_kl(
     else:
         raise NotImplementedError
 
-def action_extractor(func):
-
-    @functools.wraps(func)
-    def compute_adv_with_action_extraction(
-        raw_tensor_dict, cu_seqs, *args, **kwargs
-    ):
-        
-        def _extract_actions(tensor_dict):
-
-            indices = torch.where(tensor_dict["action_mask"])
-            return {
-                k: v[indices]
-                for k, v in tensor_dict.items()
-            }
-        
-        tensor_dict = pack_tensor_dicts([
-            _extract_actions(
-                {
-                    k: v[start_idx:end_idx]
-                    for k, v in raw_tensor_dict.items()
-                }
-            )
-            for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
-        ])
-
-        tensor_dict_delta = func(tensor_dict, *args, **kwargs)
-        
-        for k, v in tensor_dict_delta.items():
-            raw_tensor_dict[k] = torch.zeros(raw_tensor_dict["states"].shape)
-            for idx, (start_idx, end_idx) in enumerate(
-                zip(cu_seqs[:-1], cu_seqs[1:])
-            ):
-                indices = torch.where(raw_tensor_dict["action_mask"][start_idx:end_idx])
-                raw_tensor_dict[k][start_idx:end_idx][indices] = v[idx][:len(indices[0])]
-    
-    return compute_adv_with_action_extraction
-
-@action_extractor
 def compute_gae(tensor_dict, gamma, lamda):
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
@@ -82,7 +44,6 @@ def compute_gae(tensor_dict, gamma, lamda):
 
     return {"advantages": advantages, "returns": returns}
 
-@action_extractor
 def compute_reinforce_adv(
     tensor_dict,
     responses_per_prompt,
@@ -107,3 +68,48 @@ def compute_reinforce_adv(
 
     advantages = advantages.view(-1, 1) * tensor_dict["action_mask"]
     return {"advantages": advantages}
+
+@time_logger("compute_advantages")
+def compute_advantages(
+    config, raw_tensor_dict, cu_seqs, step
+):
+
+    def _extract_actions(tensor_dict):
+
+        indices = torch.where(tensor_dict["action_mask"])
+        return {
+            k: v[indices]
+            for k, v in tensor_dict.items()
+        }
+    
+    tensor_dict = pack_tensor_dicts([
+        _extract_actions(
+            {
+                k: v[start_idx:end_idx]
+                for k, v in raw_tensor_dict.items()
+            }
+        )
+        for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
+    ])
+
+    if config.estimator == "gae":
+        tensor_dict_delta = compute_gae(
+            tensor_dict, config.gamma, config.lamda
+        )
+    elif config.estimator == "reinforce":
+        tensor_dict_delta = compute_reinforce_adv(
+            tensor_dict,
+            config.responses_per_prompt,
+            config.global_norm,
+            config.norm_var
+        )
+    else:
+        raise NotImplementedError
+
+    for k, v in tensor_dict_delta.items():
+        raw_tensor_dict[k] = torch.zeros(raw_tensor_dict["states"].shape)
+        for idx, (start_idx, end_idx) in enumerate(
+            zip(cu_seqs[:-1], cu_seqs[1:])
+        ):
+            indices = torch.where(raw_tensor_dict["action_mask"][start_idx:end_idx])
+            raw_tensor_dict[k][start_idx:end_idx][indices] = v[idx][:len(indices[0])]

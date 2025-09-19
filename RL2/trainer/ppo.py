@@ -6,9 +6,7 @@ from RL2.trainer import Trainer
 from RL2.datasets import RLDataset, get_dataloader
 from RL2.workers import Actor, Rollout, Critic
 from RL2.utils.algorithms import (
-    compute_approx_kl,
-    compute_gae,
-    compute_reinforce_adv
+    compute_approx_kl, compute_advantages
 )
 from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.checkpointing import load_ckpt, save_ckpt, save_model
@@ -60,27 +58,6 @@ class PPOTrainer(Trainer):
         wandb.log({
             "actor/kl": (approx_kl.sum() / tensor_dict["action_mask"].sum()).item()
         }, step=step)
-    
-    @time_logger("compute_advantages")
-    def compute_advantages(self, tensor_dict, cu_seqs, step):
-
-        if self.config.adv.estimator == "gae":
-            compute_gae(
-                tensor_dict,
-                cu_seqs,
-                self.config.adv.gamma,
-                self.config.adv.lamda
-            )
-        elif self.config.adv.estimator == "reinforce":
-            compute_reinforce_adv(
-                tensor_dict,
-                cu_seqs,
-                self.config.train_data.responses_per_prompt,
-                self.config.adv.global_norm,
-                self.config.adv.norm_var
-            )
-        else: 
-            raise NotImplementedError
             
     def train(self):
 
@@ -111,7 +88,7 @@ class PPOTrainer(Trainer):
                 if dist.get_rank() == 0:
                     if self.config.actor.kl.coef > 0:
                         self.compute_approx_kl(tensor_dict, step)
-                    self.compute_advantages(tensor_dict, cu_seqs, step)
+                    compute_advantages(self.config.adv, tensor_dict, cu_seqs, step)
 
                 self.actor.update(tensor_dict, step)
                 if self.config.adv.estimator == "gae":
