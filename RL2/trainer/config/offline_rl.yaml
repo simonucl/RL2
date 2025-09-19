@@ -12,6 +12,7 @@ actor:
   tp_size: 1
   sp_size: 1
   max_length_per_device: null
+  max_inference_length_per_device: ${actor.max_length_per_device}
   avg_level: token
   lr: 5e-6
   weight_decay: 1e-2
@@ -21,20 +22,21 @@ actor:
   offload_optimizer: true
 
 ref_actor:
-  model_name: null
-  use_liger_kernel: false
+  model_name: ${actor.model_name}
+  use_liger_kernel: ${actor.use_liger_kernel}
   gradient_checkpointing: true
-  ddp_size: 1
-  tp_size: 1
-  sp_size: 1
-  max_length_per_device: null
-
+  ddp_size: ${actor.ddp_size}
+  tp_size: ${actor.tp_size}
+  sp_size: ${actor.sp_size}
+  max_length_per_device: ${actor.max_length_per_device}
+  max_inference_length_per_device: ${actor.max_length_per_device}
+  
 offline_rl:
   positive_label_scale: 1.0  # Scale factor for positive labels
   negative_label_scale: 1.0  # Scale factor for negative labels
   norm_var: false  # Normalize advantages by standard deviation
   kl_coef: 0.0  # KL divergence coefficient (0.0 = no KL penalty)
-  kl_estimator: k1  # KL estimator type: k1, k2, or k3
+  kl_estimator: k2  # KL estimator type: k1, k2, or k3
 
 trainer:
   project: null
