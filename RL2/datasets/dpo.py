@@ -14,14 +14,12 @@ class DPODataset(RMDataset):
                 ex["prompt"], ex["rejected"]
             )
         else:
-            chosen = self.tokenize_messages(
-                ex["messages"] + [
-                    {"role": "assistant", "content": ex["chosen"]}
-                ]
-            )
-            rejected = self.tokenize_messages(
-                ex["messages"] + [
-                    {"role": "assistant", "content": ex["rejected"]}
-                ]
-            )
+            chosen_messages = ex["messages"] + [
+                {"role": "assistant", "content": ex["chosen"]}
+            ]
+            rejected_messages = ex["messages"] + [
+                {"role": "assistant", "content": ex["rejected"]}
+            ]
+            chosen = self.tokenize_messages(chosen_messages)
+            rejected = self.tokenize_messages(rejected_messages)
         return chosen, rejected

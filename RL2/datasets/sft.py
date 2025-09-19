@@ -6,11 +6,12 @@ class SFTDataset(BaseDataset):
 
         ex = self.dataset[idx]
         if "prompt" in ex.keys():
-            return self.tokenize_prompt_response(
+            tensor_dict = self.tokenize_prompt_response(
                 ex["prompt"], ex["response"]
             )
         else:
-            return self.tokenize_messages(ex["messages"])
+            tensor_dict = self.tokenize_messages(ex["messages"])
+        return tensor_dict
         
     def collate_fn(self, tensor_dicts):
         return pack_tensor_dicts(tensor_dicts)

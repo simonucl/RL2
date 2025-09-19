@@ -14,19 +14,21 @@ class RMDataset(BaseDataset):
                 ex["prompt"], ex["rejected"], rm=True
             )
         else:
+            chosen_messages = ex["messages"] + [
+                {"role": "assistant", "content": ex["chosen"]}
+            ]
+            rejected_messages = ex["messages"] + [
+                {"role": "assistant", "content": ex["rejected"]}
+            ]
             chosen = self.tokenize_messages(
-                ex["messages"] + [
-                    {"role": "assistant", "content": ex["chosen"]}
-                ], rm=True
+                chosen_messages, rm=True
             )
             rejected = self.tokenize_messages(
-                ex["messages"] + [
-                    {"role": "assistant", "content": ex["rejected"]}
-                ], rm=True
+                rejected_messages, rm=True
             )
         return chosen, rejected
     
-    def collate_fn(self, batch):
-        return pack_tensor_dicts(
-            sum([list(b) for b in batch], [])
-        )
+    def collate_fn(self, all_tensor_dicts):
+        
+        tensor_dicts = sum([list(tds) for tds in all_tensor_dicts], [])
+        return pack_tensor_dicts(tensor_dicts)

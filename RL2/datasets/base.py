@@ -21,15 +21,6 @@ def load_dataset(data_path):
     else:
         return datasets.load_dataset(data_path, split=split)
 
-def get_dataloader(dataset, batch_size):
-    return StatefulDataLoader(
-        dataset,
-        batch_size,
-        shuffle=True,
-        drop_last=True,
-        collate_fn=dataset.collate_fn
-    )
-
 def get_tensor_dict(
     states,
     actions,
@@ -107,6 +98,7 @@ class BaseDataset(Dataset):
 
         prev_text, states, actions, action_mask = "", [], [], []
         for turn in range(len(messages)):
+            
             is_this_turn_assistant = messages[turn]["role"] == "assistant"
             is_next_turn_assistant = turn + 1 < len(messages) and messages[turn + 1]["role"] == "assistant"
 
@@ -134,3 +126,13 @@ class BaseDataset(Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+
+def get_dataloader(dataset, batch_size):
+    return StatefulDataLoader(
+        dataset,
+        batch_size,
+        shuffle=True,
+        drop_last=True,
+        collate_fn=dataset.collate_fn
+    )
