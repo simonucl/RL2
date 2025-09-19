@@ -9,22 +9,23 @@ from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
+from transformers import AutoTokenizer
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
-from RL2.workers import Worker
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import launch_server_process, launch_router_process
 from RL2.utils.logging import time_logger
 
 
-class Rollout(Worker):
+class Rollout:
 
     def __init__(self, config):
-        super().__init__(config, None)
         
+        self.config = config
+        self.prepare_device_mesh()
         self.prepare_environment_variables()
         if self.device_mesh["tp"].get_local_rank() == 0:
 
@@ -42,6 +43,9 @@ class Rollout(Worker):
         if dist.get_rank() == 0:
 
             self.prepare_environment()
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                config.server_args.model_path, trust_remote_code=True
+            )
             self.router_host, self.router_port = launch_router_process(worker_urls)
 
             self.train_sampling_params = OmegaConf.to_container(
