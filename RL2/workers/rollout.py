@@ -142,16 +142,16 @@ class Rollout:
         tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
         return tensor_dict
         
-    async def rollout(self, ex, train):
+    async def rollout(self, data, train):
 
-        if "prompt" in ex:
-            state_text = ex["prompt"]
+        if "prompt" in data:
+            state_text = data["prompt"]
         else:
-            state_text, ex["extra_info"] = await self.env.reset(
-                ex["extra_info"]
+            state_text, data["extra_info"] = await self.env.reset(
+                data["extra_info"]
             )
         state_dict = self.initialize_state_dict(state_text)
-        env_response = {"extra_info": ex["extra_info"]}
+        env_response = {"extra_info": data["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
         scores = []
@@ -206,7 +206,7 @@ class Rollout:
             loop = asyncio.get_event_loop()
             outputs = loop.run_until_complete(
                 tqdm.gather(
-                    *(self.rollout(ex, train) for ex in data_list),
+                    *(self.rollout(data, train) for data in data_list),
                     desc="Rollout",
                     position=1,
                     leave=False,
@@ -215,7 +215,7 @@ class Rollout:
             )
 
             all_tensor_dicts, metrics = map(list, zip(*outputs))
-
+            # TODO: simplify
             suffix = "train" if train else "test"
             metrics = {
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
