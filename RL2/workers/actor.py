@@ -12,7 +12,6 @@ from RL2.utils.functions import (
 )
 from RL2.utils.algorithms import compute_approx_kl
 from RL2.utils.offloading import model_offloading_manager
-from RL2.utils.checkpointing import get_state_dict
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -25,7 +24,7 @@ class Actor(Worker):
 
     def __init__(self, config, train: bool):
         super().__init__(config, train)
-        
+        # TODO: support very big models
         if config.use_liger_kernel:
             assert config.tp_size == 1, \
                 "Liger kernel is not compatible with tensor parallelism."
@@ -91,7 +90,6 @@ class Actor(Worker):
     @data_manager(pack_minibatches=True)
     def update(self, batches, step: int):
         if step < self.config.freeze_steps:
-            self.state_dict = get_state_dict(self)
             return
 
         self.model.train()
@@ -163,5 +161,3 @@ class Actor(Worker):
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-
-        self.state_dict = get_state_dict(self)

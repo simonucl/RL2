@@ -20,11 +20,9 @@ def get_state_dict(worker, full_state_dict=False):
     return get_model_state_dict(worker.model, options=options)
 
 def get_worker_ckpt(worker):
-    
-    if not hasattr(worker, "state_dict"):
-        worker.state_dict = get_state_dict(worker)
+
     return {
-        "model": worker.state_dict,
+        "model": get_state_dict(worker),
         "optimizer": worker.optimizer.state_dict(),
         "scheduler": worker.scheduler.state_dict()
     }
@@ -37,7 +35,7 @@ def get_ckpt(trainer, workers, step):
     }
 
     for idx, worker in enumerate(workers):
-        if hasattr(worker, "model"):
+        if worker.__class__.__name__ in ["Actor", "Critic"]:
             ckpt[f"worker{idx}"] = get_worker_ckpt(worker)
 
     return ckpt
@@ -54,10 +52,8 @@ def load_worker_ckpt(worker, ckpt):
 def load_ckpt(trainer, workers):
 
     checkpoint_id = trainer.config.trainer.load_ckpt_from
-    
     if checkpoint_id is None:
         return 0
-
     if checkpoint_id == "latest":
         save_dirs = glob.glob(f"{trainer.config.trainer.save_dir}/step*")
         if not save_dirs:
@@ -70,11 +66,11 @@ def load_ckpt(trainer, workers):
     dcp.load(ckpt, checkpoint_id=checkpoint_id)
     trainer.train_dataloader.load_state_dict(ckpt["dataloader"])
     for idx, worker in enumerate(workers):
-        if hasattr(worker, "model"):
+        if worker.__class__.__name__ in ["Actor", "Critic"]:
             load_worker_ckpt(worker, ckpt[f"worker{idx}"])
-        elif worker is not None:
+        elif worker.__class__.__name__ == "Rollout":
             if worker.device_mesh["tp"].get_local_rank() == 0:
-                worker.llm.release_memory_occupation()
+                worker.make_request("release_memory_occupation")
             worker.update(workers[0], ckpt["step"])
 
     return ckpt["step"]

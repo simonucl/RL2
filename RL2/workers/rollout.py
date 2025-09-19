@@ -17,6 +17,7 @@ from tqdm.asyncio import tqdm
 import wandb
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import launch_server_process, launch_router_process
+from RL2.utils.checkpointing import get_state_dict
 from RL2.utils.logging import time_logger, gather_and_log
 
 
@@ -265,13 +266,14 @@ class Rollout:
     @time_logger("update_rollout")
     def update(self, actor, step):
 
+        state_dict = get_state_dict(actor)
         torch.cuda.empty_cache()
         dist.barrier()
-        # or llm.resume_memory_occupation() may OOM
+        # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.make_request("resume_memory_occupation")
         
-        for idx, (name, tensor) in enumerate(actor.state_dict.items()):
+        for idx, (name, tensor) in enumerate(state_dict.items()):
             tensor = tensor.to(torch.cuda.current_device())
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
@@ -299,10 +301,9 @@ class Rollout:
                 ]
                 payload = {
                     "serialized_named_tensors": serialized_named_tensors,
-                    "flush_cache": (idx == len(actor.state_dict) - 1)
+                    "flush_cache": (idx == len(state_dict) - 1)
                 }
                 self.make_request(
                     "update_weights_from_tensor", payload
                 )
-        actor.state_dict.clear()
         dist.barrier()
