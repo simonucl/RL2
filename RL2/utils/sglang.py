@@ -1,0 +1,51 @@
+import time
+import requests
+import multiprocessing
+import torch.distributed as dist
+from sglang.srt.server_args import ServerArgs
+from sglang.srt.entrypoints.http_server import launch_server
+from sglang_router.launch_router import RouterArgs, launch_router
+
+def launch_server_process(config):
+
+    server_args = ServerArgs(
+        model_path=config.model_name,
+        dtype=config.dtype,
+        tp_size=config.tp_size,
+        mem_fraction_static=config.gpu_memory_utilization,
+        enable_memory_saver=True,
+        port=config.base_port + dist.get_rank()
+    )
+    process = multiprocessing.Process(
+        target=launch_server,
+        args=(server_args,)
+    )
+    process.start()
+
+    with requests.Session() as session:
+        while True:
+            assert process.is_alive()
+            try:
+                response = session.get(
+                    f"{server_args.url()}/health_generate"
+                )
+                if response.status_code == 200:
+                    break
+            except:
+                pass
+            time.sleep(1)
+
+    return server_args.url()
+
+def launch_router_process(worker_urls):
+
+    router_args = RouterArgs(
+        port=20000,
+        worker_urls=worker_urls,
+    )
+    process = multiprocessing.Process(
+        target=launch_router, args=(router_args,)
+    )
+    process.start()
+    time.sleep(3)
+    assert process.is_alive()

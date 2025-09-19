@@ -1,12 +1,14 @@
 from omegaconf import OmegaConf
 import os
+import base64
 import asyncio
+import aiohttp
+import requests
 import importlib
 from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
-from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
@@ -14,8 +16,8 @@ from tqdm.asyncio import tqdm
 import wandb
 from RL2.workers import Worker
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
-from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
-from RL2.utils.logging import time_logger, gather_and_log
+from RL2.utils.sglang import launch_server_process, launch_router_process
+from RL2.utils.logging import time_logger
 
 
 class Rollout(Worker):
@@ -25,18 +27,23 @@ class Rollout(Worker):
         
         self.prepare_environment_variables()
         if self.device_mesh["tp"].get_local_rank() == 0:
-            self.prepare_environment()
 
-            os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
-            self.llm = Engine(
-                model_path=config.model_name,
-                dtype=config.dtype,
-                tp_size=self.device_mesh["tp"].size(),
-                mem_fraction_static=config.gpu_memory_utilization,
-                enable_memory_saver=True,
-                port=config.base_port + dist.get_rank()
+            self.worker_url = launch_server_process(config)
+            worker_urls = [
+                None for _ in range(self.device_mesh["dp"].size())
+            ] if self.device_mesh["dp"].get_local_rank() == 0 else None
+            dist.gather_object(
+                self.worker_url,
+                worker_urls,
+                group_dst=0,
+                group=self.device_mesh["dp"].get_group(),
             )
         
+        if dist.get_rank() == 0:
+
+            self.prepare_environment()
+            launch_router_process(worker_urls)
+
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params
             )
@@ -85,6 +92,30 @@ class Rollout(Worker):
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
+    def make_request(self, endpoint, payload=None):
+
+        response = requests.post(
+            f"{self.worker_url}/{endpoint}",
+            json=payload or {}
+        )
+        response.raise_for_status()
+
+    async def async_generate(self, states, train):
+
+        payload = {
+            "input_ids": states,
+            "sampling_params": self.train_sampling_params
+            if train else self.test_sampling_params,
+            "return_logprob": True
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"http://localhost:20000/generate",
+                json=payload
+            ) as response:
+                return await response.json(content_type=None)
+
     def initialize_state_dict(self, state_text):
 
         states = self.tokenizer.encode(state_text, add_special_tokens=False)
@@ -120,11 +151,8 @@ class Rollout(Worker):
         scores = []
         for turn in range(1, self.config.max_turns + 1):
 
-            llm_response = await self.llm.async_generate(
-                input_ids=state_dict["states"],
-                sampling_params=self.train_sampling_params
-                if train else self.test_sampling_params,
-                return_logprob=True
+            llm_response = await self.async_generate(
+                state_dict["states"], train
             )
 
             action_text = llm_response["text"]
@@ -167,15 +195,8 @@ class Rollout(Worker):
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
 
-        # The data is distributed from rank 0 before each worker operation
-        # and gathered before the next operation, which facilitates to do
-        # model-agnostic operations, e.g., computing advantages, globally 
-        # and guarantees the load balancing across all model computations.
-        if self.device_mesh["tp"].get_local_rank() == 0:
+        if dist.get_rank() == 0:
 
-            data_list = split_and_scatter_list(
-                data_list, self.device_mesh["dp"]
-            )
             loop = asyncio.get_event_loop()
             outputs = loop.run_until_complete(
                 tqdm.gather(
@@ -186,13 +207,6 @@ class Rollout(Worker):
                     disable=(dist.get_rank() != 0)
                 )
             )
-            if train:
-                # If test, llm will soon be called again. See `Trainer.train`.
-                self.llm.release_memory_occupation()
-
-        dist.barrier()
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
 
             all_tensor_dicts, metrics = map(list, zip(*outputs))
 
@@ -201,44 +215,52 @@ class Rollout(Worker):
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            gather_and_log(metrics, self.device_mesh["dp"], step)
+            metrics = {
+                k: sum(v) / len(v)
+                for k, v in metrics.items()
+            }
+            tqdm.write(f"Step {step}, " + ", ".join([
+                f"{k}: {v:.3g}" for k, v in metrics.items()
+            ]))
+            wandb.log(metrics, step=step)
 
-            if not train:
-                return
+        dist.barrier()
 
-            all_tensor_dicts = gather_and_concat_list(
-                all_tensor_dicts, self.device_mesh["dp"]
+        if not train:
+            return
+
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            self.make_request("release_memory_occupation")
+
+        if dist.get_rank() == 0:
+
+            group_size = self.config.responses_per_prompt
+            if group_size > 1 and self.config.dynamic_filtering:
+
+                rewards = torch.FloatTensor([
+                    sum([td["rewards"].sum().item() for td in tensor_dicts])
+                    for tensor_dicts in all_tensor_dicts
+                ]).view(-1, group_size)
+                are_filtered = rewards.std(-1) == 0
+                all_tensor_dicts = sum([
+                    all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
+                    for idx, is_filtered in enumerate(are_filtered)
+                    if not is_filtered
+                ], [])
+                wandb.log({
+                    "dynamic_filtering_ratio": are_filtered.float().mean().item()
+                }, step=step)
+
+            tensor_dicts = sum(all_tensor_dicts, [])
+            tensor_dict = pack_tensor_dicts(tensor_dicts)
+            seqs = torch.LongTensor([
+                len(tensor_dicts) for tensor_dicts in all_tensor_dicts
+            ])
+            cu_seqs = torch.cumsum(
+                torch.cat((torch.LongTensor([0]), seqs)), dim=0
             )
-
-            if dist.get_rank() == 0:
-
-                group_size = self.config.responses_per_prompt
-                if group_size > 1 and self.config.dynamic_filtering:
-
-                    rewards = torch.FloatTensor([
-                        sum([td["rewards"].sum().item() for td in tensor_dicts])
-                        for tensor_dicts in all_tensor_dicts
-                    ]).view(-1, group_size)
-                    are_filtered = rewards.std(-1) == 0
-                    all_tensor_dicts = sum([
-                        all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
-                        for idx, is_filtered in enumerate(are_filtered)
-                        if not is_filtered
-                    ], [])
-                    wandb.log({
-                        "dynamic_filtering_ratio": are_filtered.float().mean().item()
-                    }, step=step)
-
-                tensor_dicts = sum(all_tensor_dicts, [])
-                tensor_dict = pack_tensor_dicts(tensor_dicts)
-                seqs = torch.LongTensor([
-                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts
-                ])
-                cu_seqs = torch.cumsum(
-                    torch.cat((torch.LongTensor([0]), seqs)), dim=0
-                )
-                
-                return tensor_dict, cu_seqs
+            
+            return tensor_dict, cu_seqs
 
         return None, None
         
@@ -249,7 +271,7 @@ class Rollout(Worker):
         dist.barrier()
         # or llm.resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
-            self.llm.resume_memory_occupation()
+            self.make_request("resume_memory_occupation")
         
         for idx, (name, tensor) in enumerate(actor.state_dict.items()):
             tensor = tensor.to(torch.cuda.current_device())
@@ -266,11 +288,23 @@ class Rollout(Worker):
                 group=self.device_mesh["tp"].get_group(),
             )
             if self.device_mesh["tp"].get_local_rank() == 0:
-                self.llm.update_weights_from_tensor(
-                    named_tensors=[(
-                        name, LocalSerializedTensor(values=serialized_tensors)
-                    )],
-                    flush_cache=(idx == len(actor.state_dict) - 1)
+                named_tensors = [
+                    (name, LocalSerializedTensor(values=serialized_tensors))
+                ]
+                serialized_named_tensors = [
+                    MultiprocessingSerializer.serialize(named_tensors)
+                    for _ in range(self.device_mesh["tp"].size())
+                ]
+                serialized_named_tensors = [
+                    base64.b64encode(snt).decode("utf-8")
+                    for snt in serialized_named_tensors
+                ]
+                payload = {
+                    "serialized_named_tensors": serialized_named_tensors,
+                    "flush_cache": (idx == len(actor.state_dict) - 1)
+                }
+                self.make_request(
+                    "update_weights_from_tensor", payload
                 )
         actor.state_dict.clear()
         dist.barrier()
