@@ -17,7 +17,7 @@ from tqdm.asyncio import tqdm
 import wandb
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import launch_server_process, launch_router_process
-from RL2.utils.logging import time_logger
+from RL2.utils.logging import time_logger, gather_and_log
 
 
 class Rollout:
@@ -215,20 +215,12 @@ class Rollout:
             )
 
             all_tensor_dicts, metrics = map(list, zip(*outputs))
-            # TODO: simplify
             suffix = "train" if train else "test"
             metrics = {
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            metrics = {
-                k: sum(v) / len(v)
-                for k, v in metrics.items()
-            }
-            tqdm.write(f"Step {step}, " + ", ".join([
-                f"{k}: {v:.3g}" for k, v in metrics.items()
-            ]))
-            wandb.log(metrics, step=step)
+            gather_and_log(metrics, step)
 
         dist.barrier()
 

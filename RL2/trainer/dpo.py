@@ -38,7 +38,7 @@ def update(worker, minibatches, step):
 
     grad_norm = worker.optimizer_step()
     metrics["grad_norm"].append(grad_norm)
-    gather_and_log(metrics, worker.device_mesh["dp"], step)
+    gather_and_log(metrics, step, worker.device_mesh["dp"])
 
 
 class DPOTrainer(Trainer):

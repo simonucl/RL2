@@ -33,13 +33,21 @@ def time_logger(name):
         return wrapper
     return decorator
 
-def gather_and_log(metrics, device_mesh, step, metrics_to_sum=["loss"]):
+def gather_and_log(
+    metrics,
+    step,
+    device_mesh=None,
+    metrics_to_sum=["loss"]
+):
 
-    metrics = {
-        k: gather_and_concat_list(v, device_mesh)
-        for k, v in metrics.items()
-    }
+    if device_mesh is not None:
+        metrics = {
+            k: gather_and_concat_list(v, device_mesh)
+            for k, v in metrics.items()
+        }
+
     if dist.get_rank() == 0:
+
         metrics = {
             k: sum(v) / (1.0 if k in metrics_to_sum else len(v))
             for k, v in metrics.items()
