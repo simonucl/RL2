@@ -1,3 +1,4 @@
+import torch
 from torch.distributed.tensor.placement_types import Shard
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
@@ -31,6 +32,10 @@ def prepare_llama_tp_layer(layer, device_mesh):
             output_layouts=Shard(1)
         )
     }
+
+    if device_mesh.get_local_rank() != 0:
+        layer.to_empty(torch.cuda.current_device())
+
     parallelize_module(
         module=layer,
         device_mesh=device_mesh,
@@ -49,6 +54,12 @@ def prepare_llama_tp_actor(model, device_mesh):
         "model.norm": SequenceParallel(),
         "lm_head": ColwiseParallel()
     }
+
+    if device_mesh.get_local_rank() != 0:
+        model.model.embed_tokens.to_empty(torch.cuda.current_device())
+        model.model.norm.to_empty(torch.cuda.current_device())
+        model.lm_head.to_empty(torch.cuda.current_device())
+
     parallelize_module(
         module=model,
         device_mesh=device_mesh,
@@ -70,6 +81,13 @@ def prepare_llama_tp_critic(model, device_mesh):
             input_layouts=Shard(1)
         )
     }
+
+    if device_mesh.get_local_rank() != 0:
+        model.model.embed_tokens.to_empty(torch.cuda.current_device())
+        model.model.norm.to_empty(torch.cuda.current_device())
+        model.dropout.to_empty(torch.cuda.current_device())
+        model.score.to_empty(torch.cuda.current_device())
+
     parallelize_module(
         module=model,
         device_mesh=device_mesh,

@@ -33,11 +33,15 @@ class Actor(Worker):
         else:
             model_cls = AutoModelForCausalLM
 
-        self.model = model_cls.from_pretrained(
-            config.model_name,
-            trust_remote_code=True,
-            attn_implementation="flash_attention_2"
-        )
+        with torch.device(
+            "cpu" if self.device_mesh["tp"].get_local_rank() == 0
+            else "meta"
+        ):
+            self.model = model_cls.from_pretrained(
+                config.model_name,
+                trust_remote_code=True,
+                attn_implementation="flash_attention_2"
+            )
 
         self.prepare_model_optimizer()
 
