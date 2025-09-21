@@ -20,7 +20,7 @@ actor:
   temperature: ${rollout.train_sampling_params.temperature}
   update_per_rollout: 1
   clip: 0.2
-  tis_coef: 2.0
+  tis_coef: 0.0
   avg_level: token
   lr: 1e-6
   weight_decay: 1e-2
