@@ -1,0 +1,2 @@
+bash examples/gem_reinforce.sh
+bash examples/gem_reinforce_guess_number.sh
