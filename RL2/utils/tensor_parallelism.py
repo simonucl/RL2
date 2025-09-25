@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
@@ -17,6 +18,15 @@ from transformers import (
 
 def to_empty(module):
     module.to_empty(device=torch.cuda.current_device())
+
+def sync_module_states(module, attr, device_mesh):
+
+    module.to(torch.cuda.current_device())
+    dist.broadcast(
+        getattr(module, attr),
+        group=device_mesh.get_group(),
+        group_src=0
+    )
 
 def prepare_llama_tp_layer(layer, device_mesh):
 
@@ -38,6 +48,8 @@ def prepare_llama_tp_layer(layer, device_mesh):
 
     if device_mesh.get_local_rank() != 0:
         to_empty(layer)
+    sync_module_states(layer.input_layernorm, "weight", device_mesh)
+    sync_module_states(layer.post_attention_layernorm, "weight", device_mesh)
 
     parallelize_module(
         module=layer,
@@ -63,6 +75,8 @@ def prepare_llama_tp_actor(model, device_mesh):
         to_empty(model.model.rotary_emb)
         to_empty(model.model.norm)
         to_empty(model.lm_head)
+    sync_module_states(model.model.norm, "weight", device_mesh)
+    sync_module_states(model.model.rotary_emb, "inv_freq", device_mesh)
 
     parallelize_module(
         module=model,
@@ -92,6 +106,8 @@ def prepare_llama_tp_critic(model, device_mesh):
         to_empty(model.model.norm)
         to_empty(model.dropout)
         to_empty(model.score)
+    sync_module_states(model.model.norm, "weight", device_mesh)
+    sync_module_states(model.model.rotary_emb, "inv_freq", device_mesh)
 
     parallelize_module(
         module=model,
