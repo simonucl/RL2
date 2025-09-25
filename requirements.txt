@@ -1,12 +1,12 @@
 hydra-core
 ninja
-ring-flash-attn==0.1.4
-torch==2.6.0
+ring-flash-attn==0.1.8
+torch==2.8.0
 tqdm
 transformers
 peft
 liger_kernel
-sglang[all]==0.4.6.post5
+sglang[all]==0.5.2
 wandb
-flash-attn==2.7.4.post1
+flash-attn==2.8.3
 torchdata
