@@ -15,6 +15,9 @@ from transformers import (
     Qwen3ForTokenClassification
 )
 
+def to_empty(module):
+    module.to_empty(device=torch.cuda.current_device())
+
 def prepare_llama_tp_layer(layer, device_mesh):
 
     parallelize_plan = {
@@ -34,7 +37,7 @@ def prepare_llama_tp_layer(layer, device_mesh):
     }
 
     if device_mesh.get_local_rank() != 0:
-        layer.to_empty(torch.cuda.current_device())
+        to_empty(layer)
 
     parallelize_module(
         module=layer,
@@ -56,9 +59,10 @@ def prepare_llama_tp_actor(model, device_mesh):
     }
 
     if device_mesh.get_local_rank() != 0:
-        model.model.embed_tokens.to_empty(torch.cuda.current_device())
-        model.model.norm.to_empty(torch.cuda.current_device())
-        model.lm_head.to_empty(torch.cuda.current_device())
+        to_empty(model.model.embed_tokens)
+        to_empty(model.model.rotary_emb)
+        to_empty(model.model.norm)
+        to_empty(model.lm_head)
 
     parallelize_module(
         module=model,
@@ -83,10 +87,11 @@ def prepare_llama_tp_critic(model, device_mesh):
     }
 
     if device_mesh.get_local_rank() != 0:
-        model.model.embed_tokens.to_empty(torch.cuda.current_device())
-        model.model.norm.to_empty(torch.cuda.current_device())
-        model.dropout.to_empty(torch.cuda.current_device())
-        model.score.to_empty(torch.cuda.current_device())
+        to_empty(model.model.embed_tokens)
+        to_empty(model.model.rotary_emb)
+        to_empty(model.model.norm)
+        to_empty(model.dropout)
+        to_empty(model.score)
 
     parallelize_module(
         module=model,
