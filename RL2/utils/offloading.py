@@ -1,6 +1,16 @@
 import functools
 import torch
+import torch.distributed as dist
 from torch.distributed.fsdp._runtime_utils import _lazy_init
+# TODO: why offloading is incompatible with initialization on meta device?
+def init_weight_context(worker):
+    if any([
+        dist.get_rank() == 0,
+        worker.device_mesh["tp"].size() > 1 and worker.device_mesh["tp"].get_local_rank() == 0,
+        getattr(worker.config, "offload_model", False)
+    ]):
+        return torch.device("cpu")
+    return torch.device("meta")
 
 def load_model_to_device(worker, device):
     

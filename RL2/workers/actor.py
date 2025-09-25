@@ -1,6 +1,5 @@
 from collections import defaultdict
 import torch
-import torch.distributed as dist
 from transformers import AutoModelForCausalLM
 from RL2.workers import Worker
 from RL2.utils.sequences import data_manager, count_total
@@ -12,7 +11,10 @@ from RL2.utils.functions import (
     aggregate_values
 )
 from RL2.utils.algorithms import compute_approx_kl
-from RL2.utils.offloading import model_offloading_manager
+from RL2.utils.offloading import (
+    init_weight_context,
+    model_offloading_manager
+)
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -25,7 +27,7 @@ class Actor(Worker):
 
     def __init__(self, config, train: bool):
         super().__init__(config, train)
-        # TODO: support very big models
+
         if config.use_liger_kernel:
             assert config.tp_size == 1, \
                 "Liger kernel is not compatible with tensor parallelism."
@@ -34,11 +36,7 @@ class Actor(Worker):
         else:
             model_cls = AutoModelForCausalLM
 
-        with torch.device(
-            "cpu" if dist.get_rank() == 0
-            or (config.tp_size > 1 and self.device_mesh["tp"].get_local_rank() == 0)
-            else "meta"
-        ):
+        with init_weight_context(self):
             self.model = model_cls.from_pretrained(
                 config.model_name,
                 trust_remote_code=True,
