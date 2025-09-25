@@ -2,6 +2,7 @@ from omegaconf import OmegaConf
 import os
 import time
 import socket
+import asyncio
 import aiohttp
 import requests
 import multiprocessing
@@ -101,8 +102,12 @@ async def async_generate(url, states, sampling_params):
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{url}/generate",
-            json=payload
-        ) as response:
-            return await response.json(content_type=None)
+        while True:
+            try:
+                async with session.post(
+                    f"{url}/generate",
+                    json=payload
+                ) as response:
+                    return await response.json(content_type=None)
+            except:
+                await asyncio.sleep(1)
