@@ -11,7 +11,11 @@ from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
-from RL2.datasets import get_tensor_dict, pack_tensor_dicts
+from RL2.datasets import (
+    initialize_state_dict,
+    state_dict_to_tensor_dict,
+    pack_tensor_dicts
+)
 from RL2.utils.sglang import (
     prepare_environment_variables,
     launch_server_process,
@@ -79,28 +83,6 @@ class Rollout:
         )
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
-
-    def initialize_state_dict(self, state_text):
-
-        states = self.tokenizer.encode(state_text, add_special_tokens=False)
-        return {
-            "states": states,
-            "actions": len(states) * [0],
-            "action_mask": len(states) * [0],
-            "logps": len(states) * [0],
-            "rewards": len(states) * [0]
-        }
-    
-    def get_tensor_dict(self, state_dict):
-
-        tensor_dict = get_tensor_dict(
-            state_dict["states"],
-            state_dict["actions"],
-            state_dict["action_mask"]
-        )
-        tensor_dict["llm_logps"] = torch.FloatTensor(state_dict["logps"][1:])
-        tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
-        return tensor_dict
         
     async def rollout(self, data, train):
 
@@ -110,7 +92,7 @@ class Rollout:
             state_text, data["extra_info"] = await self.env.reset(
                 data["extra_info"]
             )
-        state_dict = self.initialize_state_dict(state_text)
+        state_dict = initialize_state_dict(self.tokenizer, state_text)
         env_response = {"extra_info": data["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
@@ -143,17 +125,21 @@ class Rollout:
             scores.append(env_response["score"])
 
             if turn == self.config.max_turns or env_response["done"]:
-                tensor_dicts.append(self.get_tensor_dict(state_dict))
+                tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
                 break
             if env_response["next_state"].startswith(state_text + action_text):
-                state_dict_delta = self.initialize_state_dict(
+                state_dict_delta = initialize_state_dict(
+                    self.tokenizer,
                     env_response["next_state"][len(state_text + action_text):]
                 )
                 for k, v in state_dict_delta.items():
                     state_dict[k].extend(v)
             else:
-                tensor_dicts.append(self.get_tensor_dict(state_dict))
-                state_dict = self.initialize_state_dict(env_response["next_state"])
+                tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
+                state_dict = initialize_state_dict(
+                    self.tokenizer,
+                    env_response["next_state"]
+                )
             state_text = env_response["next_state"]
 
         metric["n_turns"].append(turn)
