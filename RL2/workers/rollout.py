@@ -1,22 +1,24 @@
 from omegaconf import OmegaConf
-import os
 import base64
 import asyncio
-import aiohttp
-import requests
 import importlib
 from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
-from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
-from RL2.utils.sglang import launch_server_process, launch_router_process
+from RL2.utils.sglang import (
+    prepare_environment_variables,
+    launch_server_process,
+    launch_router_process,
+    make_request,
+    async_generate
+)
 from RL2.utils.checkpointing import get_state_dict
 from RL2.utils.logging import time_logger, gather_and_log
 
@@ -27,7 +29,7 @@ class Rollout:
         
         self.config = config
         self.prepare_device_mesh()
-        self.prepare_environment_variables()
+        prepare_environment_variables(self.device_mesh["tp"])
         if self.device_mesh["tp"].get_local_rank() == 0:
 
             self.worker_url = launch_server_process(config.server_args)
@@ -70,25 +72,6 @@ class Rollout:
             mesh_shape=(self.dp_size, self.config.server_args.tp_size)
         )
 
-    def prepare_environment_variables(self):
-
-        if "TORCHELASTIC_USE_AGENT_STORE" in os.environ.keys():
-            del os.environ["TORCHELASTIC_USE_AGENT_STORE"]
-        monkey_patch_torch_reductions()
-        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        if cuda_visible_devices:
-            cuda_visible_devices = cuda_visible_devices.split(",")
-            cuda_visible_device = cuda_visible_devices[int(os.environ["LOCAL_RANK"])]
-        else:
-            cuda_visible_device = os.environ["LOCAL_RANK"]
-        cuda_visible_devices = self.device_mesh["tp"].size() * [None]
-        dist.all_gather_object(
-            cuda_visible_devices,
-            cuda_visible_device,
-            self.device_mesh["tp"].get_group(),
-        )
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
-
     def prepare_environment(self):
 
         spec = importlib.util.spec_from_file_location(
@@ -96,30 +79,6 @@ class Rollout:
         )
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
-
-    def make_request(self, endpoint, payload=None):
-
-        response = requests.post(
-            f"{self.worker_url}/{endpoint}",
-            json=payload or {}
-        )
-        response.raise_for_status()
-
-    async def async_generate(self, states, train):
-
-        payload = {
-            "input_ids": states,
-            "sampling_params": self.train_sampling_params
-            if train else self.test_sampling_params,
-            "return_logprob": True
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.router_url}/generate",
-                json=payload
-            ) as response:
-                return await response.json(content_type=None)
 
     def initialize_state_dict(self, state_text):
 
@@ -158,8 +117,11 @@ class Rollout:
         scores = []
         for turn in range(1, self.config.max_turns + 1):
 
-            llm_response = await self.async_generate(
-                state_dict["states"], train
+            llm_response = await async_generate(
+                self.router_url,
+                state_dict["states"],
+                self.train_sampling_params
+                if train else self.test_sampling_params
             )
 
             action_text = llm_response["text"]
@@ -229,7 +191,9 @@ class Rollout:
             return
 
         if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("release_memory_occupation")
+            make_request(
+                self.worker_url, "release_memory_occupation"
+            )
 
         if dist.get_rank() == 0:
 
@@ -271,7 +235,9 @@ class Rollout:
         dist.barrier()
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("resume_memory_occupation")
+            make_request(
+                self.worker_url, "resume_memory_occupation"
+            )
         
         for idx, (name, tensor) in enumerate(state_dict.items()):
             tensor = tensor.to(torch.cuda.current_device())
@@ -303,7 +269,7 @@ class Rollout:
                     "serialized_named_tensors": serialized_named_tensors,
                     "flush_cache": (idx == len(state_dict) - 1)
                 }
-                self.make_request(
-                    "update_weights_from_tensor", payload
+                make_request(
+                    self.worker_url, "update_weights_from_tensor", payload
                 )
         dist.barrier()

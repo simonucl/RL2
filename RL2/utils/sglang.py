@@ -1,8 +1,12 @@
 from omegaconf import OmegaConf
+import os
 import time
 import socket
+import aiohttp
 import requests
 import multiprocessing
+import torch.distributed as dist
+from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang_router.launch_router import RouterArgs, launch_router
@@ -18,6 +22,25 @@ def get_available_port():
         s.bind(("", 0))
         s.listen(1)
         return s.getsockname()[1]
+
+def prepare_environment_variables(device_mesh):
+
+    if "TORCHELASTIC_USE_AGENT_STORE" in os.environ.keys():
+        del os.environ["TORCHELASTIC_USE_AGENT_STORE"]
+    monkey_patch_torch_reductions()
+    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if cuda_visible_devices:
+        cuda_visible_devices = cuda_visible_devices.split(",")
+        cuda_visible_device = cuda_visible_devices[int(os.environ["LOCAL_RANK"])]
+    else:
+        cuda_visible_device = os.environ["LOCAL_RANK"]
+    cuda_visible_devices = device_mesh.size() * [None]
+    dist.all_gather_object(
+        cuda_visible_devices,
+        cuda_visible_device,
+        device_mesh.get_group(),
+    )
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
 
 def launch_server_process(server_args):
 
@@ -60,3 +83,26 @@ def launch_router_process(worker_urls):
     time.sleep(3)
     assert process.is_alive()
     return f"http://{router_args.host}:{router_args.port}"
+
+def make_request(url, endpoint, payload=None):
+
+    response = requests.post(
+        f"{url}/{endpoint}",
+        json=payload or {}
+    )
+    response.raise_for_status()
+
+async def async_generate(url, states, sampling_params):
+
+    payload = {
+        "input_ids": states,
+        "sampling_params": sampling_params,
+        "return_logprob": True
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{url}/generate",
+            json=payload
+        ) as response:
+            return await response.json(content_type=None)
