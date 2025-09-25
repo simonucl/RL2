@@ -21,9 +21,9 @@ RL2 is a production-ready library! Check our wandb report on [OpenThoughts](http
 
 ## Incoming Features
 
-- [ ] Initialize model on meta device to decrease RAM consumption
+- [X] Initialize model on meta device to decrease RAM consumption
 - [ ] Support partial rollout to increase GPU utilization
-- [ ] Use SGLang Router to forward requests for load balance between inference engines
+- [X] Use SGLang Router to forward requests for load balance between inference engines
 - [X] Integrate GEM to scale environments
 
 ## Getting Started
