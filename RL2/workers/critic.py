@@ -1,5 +1,6 @@
 from collections import defaultdict
 import torch
+import torch.distributed as dist
 from transformers import AutoModelForTokenClassification
 from RL2.workers import Worker
 from RL2.utils.sequences import data_manager, count_total
@@ -19,12 +20,17 @@ class Critic(Worker):
     def __init__(self, config):
         super().__init__(config, True)
 
-        self.model = AutoModelForTokenClassification.from_pretrained(
-            config.model_name,
-            num_labels=1,
-            trust_remote_code=True,
-            attn_implementation="flash_attention_2"
-        )
+        with torch.device(
+            "cpu" if dist.get_rank() == 0
+            or (config.tp_size > 1 and self.device_mesh["tp"].get_local_rank() == 0)
+            else "meta"
+        ):
+            self.model = AutoModelForTokenClassification.from_pretrained(
+                config.model_name,
+                num_labels=1,
+                trust_remote_code=True,
+                attn_implementation="flash_attention_2"
+            )
 
         self.prepare_model_optimizer()
 

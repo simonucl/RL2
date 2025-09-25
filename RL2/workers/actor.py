@@ -1,5 +1,6 @@
 from collections import defaultdict
 import torch
+import torch.distributed as dist
 from transformers import AutoModelForCausalLM
 from RL2.workers import Worker
 from RL2.utils.sequences import data_manager, count_total
@@ -34,7 +35,8 @@ class Actor(Worker):
             model_cls = AutoModelForCausalLM
 
         with torch.device(
-            "cpu" if self.device_mesh["tp"].get_local_rank() == 0
+            "cpu" if dist.get_rank() == 0
+            or (config.tp_size > 1 and self.device_mesh["tp"].get_local_rank() == 0)
             else "meta"
         ):
             self.model = model_cls.from_pretrained(

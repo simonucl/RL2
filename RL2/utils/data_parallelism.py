@@ -7,6 +7,9 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
+def param_init_fn(module):
+    module.to_empty(device=torch.cuda.current_device(), recurse=False)
+
 def prepare_dp_model(model, device_mesh):
 
     def get_module_cls_from_name(name):
@@ -34,6 +37,8 @@ def prepare_dp_model(model, device_mesh):
         auto_wrap_policy=auto_wrap_policy,
         sharding_strategy=ShardingStrategy.HYBRID_SHARD,
         mixed_precision=mixed_precision,
-        device_mesh=device_mesh,
+        param_init_fn=param_init_fn,
+        sync_module_states=device_mesh["tp"].size() == 1,
+        device_mesh=device_mesh["ddp", "fsdp"],
         device_id=torch.cuda.current_device()
     )

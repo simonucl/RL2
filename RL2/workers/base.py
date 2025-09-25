@@ -51,7 +51,7 @@ class Worker:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
 
         self.model = prepare_dp_model(
-            self.model, self.model_device_mesh["ddp", "fsdp"]
+            self.model, self.model_device_mesh
         )
 
         if self.train:
