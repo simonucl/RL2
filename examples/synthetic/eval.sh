@@ -61,6 +61,7 @@ stop_server() {
 }
 
 start_server
-python evals/gsm.py --model $MODEL --vllm_base_url http://localhost:8000 --repeat 5
+# python evals/gsm.py --model $MODEL --vllm_base_url http://localhost:8000 --repeat 5
+python evals/math_500.py --model $MODEL --vllm_base_url http://localhost:8000 --repeat 1
 stop_server
 sleep 10
