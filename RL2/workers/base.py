@@ -21,6 +21,21 @@ class Worker:
             config.model_name, trust_remote_code=True
         )
 
+        # Parse LoRA configuration
+        self.lora_config = getattr(config, 'lora', None)
+        self.use_lora = self.lora_config and getattr(self.lora_config, 'use_lora', False)
+
+        # Validate LoRA compatibility
+        if self.use_lora:
+            if self.config.tp_size > 1:
+                raise NotImplementedError(
+                    "LoRA is currently incompatible with Tensor Parallelism (tp_size > 1). "
+                    "This is due to PyTorch DTensor not supporting PEFT LoRA modules. "
+                    "Please use tp_size=1 with LoRA, or use FSDP/DDP for parallelism."
+                )
+            if self.lora_config.r < 1:
+                raise ValueError(f"LoRA rank must be >= 1, got {self.lora_config.r}")
+
     def prepare_device_mesh(self):
 
         world_size = dist.get_world_size()
@@ -46,6 +61,33 @@ class Worker:
 
         if self.train and self.config.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
+
+        # Apply LoRA BEFORE any parallelism wrappers
+        if self.use_lora and self.train:
+            from peft import LoraConfig, get_peft_model, TaskType
+
+            # Determine task type based on model class
+            if hasattr(self.model, 'lm_head'):
+                task_type = TaskType.CAUSAL_LM
+            elif hasattr(self.model, 'score'):
+                task_type = TaskType.SEQ_CLS
+            else:
+                task_type = TaskType.CAUSAL_LM  # default
+
+            peft_config = LoraConfig(
+                task_type=task_type,
+                r=self.lora_config.r,
+                lora_alpha=self.lora_config.lora_alpha,
+                lora_dropout=self.lora_config.lora_dropout,
+                target_modules=list(self.lora_config.target_modules),
+                bias="none",
+                use_rslora=getattr(self.lora_config, 'use_rslora', False),
+                modules_to_save=getattr(self.lora_config, 'modules_to_save', None)
+            )
+            self.model = get_peft_model(self.model, peft_config)
+
+            if dist.get_rank() == 0:
+                self.model.print_trainable_parameters()
 
         if self.config.tp_size > 1:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])

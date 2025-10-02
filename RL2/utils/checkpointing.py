@@ -12,8 +12,31 @@ from RL2.utils.sglang import make_request
 from RL2.utils.offloading import model_offloading_manager
 
 @model_offloading_manager
-def get_state_dict(worker, full_state_dict=False):
+def get_state_dict(worker, full_state_dict=False, merged=False):
 
+    # Handle LoRA models
+    if hasattr(worker.model, 'peft_config'):
+
+        # Case 1: Merged weights for rollout/inference
+        if merged:
+            # Temporarily merge adapters
+            model = worker.model
+            model.eval()  # Ensure eval mode for merging
+            merged_model = model.merge_and_unload()
+
+            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+            state_dict = get_model_state_dict(merged_model, options=options)
+
+            # Note: merged_model is a new model, original worker.model unchanged
+            return state_dict
+
+        # Case 2: Save only LoRA adapters for checkpointing (much smaller!)
+        else:
+            from peft import get_peft_model_state_dict
+            # This returns only the LoRA adapter weights
+            return get_peft_model_state_dict(worker.model)
+
+    # Normal non-LoRA path
     options = StateDictOptions(
         full_state_dict=full_state_dict,
         cpu_offload=True
@@ -44,9 +67,15 @@ def get_ckpt(trainer, workers, step):
 @model_offloading_manager
 def load_worker_ckpt(worker, ckpt):
 
-    set_model_state_dict(
-        worker.model, ckpt["model"]
-    )
+    if hasattr(worker.model, 'peft_config'):
+        # Load LoRA adapters
+        from peft import set_peft_model_state_dict
+        set_peft_model_state_dict(worker.model, ckpt["model"])
+    else:
+        # Normal FSDP state dict loading
+        set_model_state_dict(
+            worker.model, ckpt["model"]
+        )
     worker.optimizer.load_state_dict(ckpt["optimizer"])
     worker.scheduler.load_state_dict(ckpt["scheduler"])
 
@@ -93,23 +122,41 @@ def save_model(trainer, worker, rm=False):
     save_dir = trainer.config.trainer.save_dir
     if trainer.config.trainer.save_freq is not None:
         save_dir += "/latest"
-    state_dict = get_state_dict(
-        worker, full_state_dict=True
-    )
-    if dist.get_rank() == 0:
 
-        worker.tokenizer.save_pretrained(save_dir)
-        # unwrap the model
-        model_to_save = worker.model.module
-        if rm:
-            # For RM, we load token classification model for simplicity 
-            # but save sequence classification model for compatibility.
-            with torch.device("meta"):
-                model_to_save = AutoModelForSequenceClassification.from_config(
-                    model_to_save.config
-                )
-        model_to_save.save_pretrained(
-            save_dir, state_dict=state_dict
+    # For LoRA models: save both merged model AND adapters
+    if hasattr(worker.model, 'peft_config'):
+
+        # Get merged weights
+        merged_model = worker.model.module.merge_and_unload()
+        state_dict = get_state_dict(worker, full_state_dict=True, merged=True)
+
+        if dist.get_rank() == 0:
+            # Save merged model for inference
+            worker.tokenizer.save_pretrained(save_dir)
+            merged_model.save_pretrained(save_dir, state_dict=state_dict)
+
+            # Save LoRA adapters separately
+            worker.model.module.save_pretrained(save_dir + "/lora_adapters")
+
+    else:
+        # Original non-LoRA path
+        state_dict = get_state_dict(
+            worker, full_state_dict=True
         )
+        if dist.get_rank() == 0:
+
+            worker.tokenizer.save_pretrained(save_dir)
+            # unwrap the model
+            model_to_save = worker.model.module
+            if rm:
+                # For RM, we load token classification model for simplicity
+                # but save sequence classification model for compatibility.
+                with torch.device("meta"):
+                    model_to_save = AutoModelForSequenceClassification.from_config(
+                        model_to_save.config
+                    )
+            model_to_save.save_pretrained(
+                save_dir, state_dict=state_dict
+            )
 
     dist.barrier()
