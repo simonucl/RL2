@@ -1,5 +1,5 @@
-torchrun \
-    --nproc_per_node=4 \
+PYTHONPATH=$PYTHONPATH LOGLEVEL=ERROR torchrun \
+    --nproc_per_node=1 \
     -m RL2.trainer.ppo \
     train_data.prompts_per_rollout=64 \
     test_data.prompts_per_rollout=64 \

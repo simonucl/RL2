@@ -11,6 +11,18 @@ from transformers import AutoModelForSequenceClassification
 from RL2.utils.sglang import make_request
 from RL2.utils.offloading import model_offloading_manager
 
+def extract_base_layer_weights(state_dict):
+    clean_dict = {}
+    
+    for name, tensor in state_dict.items():
+        if '.base_layer.weight' in name:
+            clean_name = name.replace('.base_layer.weight', '.weight')
+            clean_dict[clean_name] = tensor
+        elif '.weight' in name and 'lora_' not in name and 'base_layer' not in name:
+            clean_dict[name] = tensor
+            
+    return clean_dict
+
 @model_offloading_manager
 def get_state_dict(worker, full_state_dict=False, merged=False):
 
@@ -19,27 +31,26 @@ def get_state_dict(worker, full_state_dict=False, merged=False):
 
         # Case 1: Merged weights for rollout/inference
         if merged:
-            # Use PEFT's context manager to temporarily merge adapters in-place
-            # This works with FSDP-wrapped models
-            from contextlib import contextmanager
-
             # Merge adapters in-place (works with FSDP)
             worker.model.merge_adapter()
 
-            # Get full merged state dict
-            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-            state_dict = get_model_state_dict(worker.model, options=options)
+            base_model = worker.model.get_base_model()
+            # Get state dict with merged weights but LoRA structure
+            options = StateDictOptions(full_state_dict=full_state_dict, cpu_offload=True)
+            state_dict = get_model_state_dict(base_model, options=options)
+
+            # Extract only base layer weights and clean up names
+            state_dict = extract_base_layer_weights(state_dict)
 
             # Unmerge to restore training state
             worker.model.unmerge_adapter()
 
             return state_dict
 
-        # Case 2: Save only LoRA adapters for checkpointing (much smaller!)
+        # Case 2: LoRA adapters only (for training checkpoints)
         else:
-            from peft import get_peft_model_state_dict
-            # This returns only the LoRA adapter weights
-            return get_peft_model_state_dict(worker.model)
+            options = StateDictOptions(full_state_dict=full_state_dict, cpu_offload=True)
+            return get_model_state_dict(worker.model, options=options)
 
     # Normal non-LoRA path
     options = StateDictOptions(
