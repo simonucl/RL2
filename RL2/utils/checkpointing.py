@@ -19,15 +19,20 @@ def get_state_dict(worker, full_state_dict=False, merged=False):
 
         # Case 1: Merged weights for rollout/inference
         if merged:
-            # Temporarily merge adapters
-            model = worker.model
-            model.eval()  # Ensure eval mode for merging
-            merged_model = model.merge_and_unload()
+            # Use PEFT's context manager to temporarily merge adapters in-place
+            # This works with FSDP-wrapped models
+            from contextlib import contextmanager
 
+            # Merge adapters in-place (works with FSDP)
+            worker.model.merge_adapter()
+
+            # Get full merged state dict
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-            state_dict = get_model_state_dict(merged_model, options=options)
+            state_dict = get_model_state_dict(worker.model, options=options)
 
-            # Note: merged_model is a new model, original worker.model unchanged
+            # Unmerge to restore training state
+            worker.model.unmerge_adapter()
+
             return state_dict
 
         # Case 2: Save only LoRA adapters for checkpointing (much smaller!)
@@ -126,14 +131,16 @@ def save_model(trainer, worker, rm=False):
     # For LoRA models: save both merged model AND adapters
     if hasattr(worker.model, 'peft_config'):
 
-        # Get merged weights
-        merged_model = worker.model.module.merge_and_unload()
+        # Get merged weights using in-place merge
         state_dict = get_state_dict(worker, full_state_dict=True, merged=True)
 
         if dist.get_rank() == 0:
             # Save merged model for inference
             worker.tokenizer.save_pretrained(save_dir)
-            merged_model.save_pretrained(save_dir, state_dict=state_dict)
+
+            # Get base model config for saving
+            base_model = worker.model.module.get_base_model()
+            base_model.save_pretrained(save_dir, state_dict=state_dict)
 
             # Save LoRA adapters separately
             worker.model.module.save_pretrained(save_dir + "/lora_adapters")
