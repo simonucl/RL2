@@ -264,12 +264,7 @@ class Rollout:
     
     @torch.no_grad()
     def update(self, named_tensor_generator):
-
-<<<<<<< HEAD
-=======
-        # Get state dict - merged if LoRA, normal otherwise
-        state_dict = get_state_dict(actor, merged=getattr(actor, 'use_lora', False))
->>>>>>> 6363157 (add LoRA training support)
+        
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
