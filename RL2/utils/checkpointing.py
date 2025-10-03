@@ -24,35 +24,23 @@ def extract_base_layer_weights(state_dict):
     return clean_dict
 
 @model_offloading_manager
-def get_state_dict(worker, full_state_dict=False, merged=False):
-
-    # Handle LoRA models
+def get_state_dict(worker, full_state_dict=False):
     if hasattr(worker.model, 'peft_config'):
-
-        # Case 1: Merged weights for rollout/inference
-        if merged:
-            # Merge adapters in-place (works with FSDP)
+        with worker.model.summon_full_params(worker.model):
             worker.model.merge_adapter()
-
             base_model = worker.model.get_base_model()
-            # Get state dict with merged weights but LoRA structure
             options = StateDictOptions(full_state_dict=full_state_dict, cpu_offload=True)
             state_dict = get_model_state_dict(base_model, options=options)
-
-            # Extract only base layer weights and clean up names
-            state_dict = extract_base_layer_weights(state_dict)
-
-            # Unmerge to restore training state
             worker.model.unmerge_adapter()
 
-            return state_dict
+        # Extract only base layer weights and clean up names
+        state_dict = extract_base_layer_weights(state_dict)
 
-        # Case 2: LoRA adapters only (for training checkpoints)
-        else:
-            options = StateDictOptions(full_state_dict=full_state_dict, cpu_offload=True)
-            return get_model_state_dict(worker.model, options=options)
+        # Unmerge to restore training state
+        worker.model.unmerge_adapter()
 
-    # Normal non-LoRA path
+        return state_dict
+
     options = StateDictOptions(
         full_state_dict=full_state_dict,
         cpu_offload=True
@@ -139,42 +127,19 @@ def save_model(trainer, worker, rm=False):
     if trainer.config.trainer.save_freq is not None:
         save_dir += "/latest"
 
-    # For LoRA models: save both merged model AND adapters
-    if hasattr(worker.model, 'peft_config'):
-
-        # Get merged weights using in-place merge
-        state_dict = get_state_dict(worker, full_state_dict=True, merged=True)
-
-        if dist.get_rank() == 0:
-            # Save merged model for inference
-            worker.tokenizer.save_pretrained(save_dir)
-
-            # Get base model config for saving
-            base_model = worker.model.module.get_base_model()
-            base_model.save_pretrained(save_dir, state_dict=state_dict)
-
-            # Save LoRA adapters separately
-            worker.model.module.save_pretrained(save_dir + "/lora_adapters")
-
-    else:
-        # Original non-LoRA path
-        state_dict = get_state_dict(
-            worker, full_state_dict=True
-        )
-        if dist.get_rank() == 0:
-
-            worker.tokenizer.save_pretrained(save_dir)
-            # unwrap the model
-            model_to_save = worker.model.module
-            if rm:
-                # For RM, we load token classification model for simplicity
-                # but save sequence classification model for compatibility.
-                with torch.device("meta"):
-                    model_to_save = AutoModelForSequenceClassification.from_config(
-                        model_to_save.config
-                    )
-            model_to_save.save_pretrained(
-                save_dir, state_dict=state_dict
+    state_dict = get_state_dict(worker, full_state_dict=True)
+    if dist.get_rank() == 0:
+        worker.tokenizer.save_pretrained(save_dir)
+        # unwrap the model
+        model_to_save = worker.model.module
+        if rm:
+            model_to_save = AutoModelForSequenceClassification.from_config(
+                model_to_save.config
             )
+        elif hasattr(worker.model, 'peft_config'):
+            model_to_save.save_pretrained(save_dir + "/lora_adapters")
+            model_to_save = model_to_save.get_base_model()
+
+        model_to_save.save_pretrained(save_dir, state_dict=state_dict)
 
     dist.barrier()
