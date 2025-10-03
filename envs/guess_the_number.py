@@ -63,6 +63,7 @@ async def reset(extra_info):
     state, _ = ENV_POOL[env_idx].reset()
     state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](state)
     extra_info["env_idx"] = env_idx
+    extra_info["env_id"] = ENV_ID  # Track environment type for metrics
     return state, extra_info
 
 async def step(state, action, extra_info):
