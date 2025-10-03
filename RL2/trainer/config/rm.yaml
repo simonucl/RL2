@@ -17,6 +17,22 @@ critic:
   warmup_ratio: 0.1
   offload_optimizer: true
 
+  lora:
+    use_lora: false
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    use_rslora: false
+    target_modules:
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+    modules_to_save: null
+
 trainer:
   project: null
   experiment_name: null

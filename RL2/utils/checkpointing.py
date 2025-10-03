@@ -11,8 +11,31 @@ from transformers import AutoModelForSequenceClassification
 from RL2.utils.sglang import make_request
 from RL2.utils.offloading import model_offloading_manager
 
+def extract_base_layer_weights(state_dict):
+    clean_dict = {}
+    
+    for name, tensor in state_dict.items():
+        if '.base_layer.weight' in name:
+            clean_name = name.replace('.base_layer.weight', '.weight')
+            clean_dict[clean_name] = tensor
+        elif '.weight' in name and 'lora_' not in name and 'base_layer' not in name:
+            clean_dict[name] = tensor
+            
+    return clean_dict
+
 @model_offloading_manager
 def get_state_dict(worker, full_state_dict=False):
+    if hasattr(worker.model, 'peft_config'):
+        with worker.model.summon_full_params(worker.model):
+            worker.model.merge_adapter()
+            base_model = worker.model.get_base_model()
+            options = StateDictOptions(full_state_dict=full_state_dict, cpu_offload=True)
+            state_dict = get_model_state_dict(base_model, options=options)
+            worker.model.unmerge_adapter()
+
+        state_dict = extract_base_layer_weights(state_dict)
+        worker.model.unmerge_adapter()
+        return state_dict
 
     options = StateDictOptions(
         full_state_dict=full_state_dict,
@@ -43,6 +66,9 @@ def get_ckpt(trainer, workers, step):
 
 @model_offloading_manager
 def load_worker_ckpt(worker, ckpt):
+
+    if hasattr(worker.model, 'peft_config'):
+        from peft import set_peft_model_state_dict as set_model_state_dict
 
     set_model_state_dict(
         worker.model, ckpt["model"]
@@ -93,11 +119,11 @@ def save_model(trainer, worker, rm=False):
     save_dir = trainer.config.trainer.save_dir
     if trainer.config.trainer.save_freq is not None:
         save_dir += "/latest"
+
     state_dict = get_state_dict(
         worker, full_state_dict=True
     )
     if dist.get_rank() == 0:
-
         worker.tokenizer.save_pretrained(save_dir)
         # unwrap the model
         model_to_save = worker.model.module
@@ -108,6 +134,12 @@ def save_model(trainer, worker, rm=False):
                 model_to_save = AutoModelForSequenceClassification.from_config(
                     model_to_save.config
                 )
+        elif hasattr(worker.model, 'peft_config'):
+            model_to_save.save_pretrained(
+                save_dir + "/lora_adapters"
+            )
+            model_to_save = model_to_save.get_base_model()
+
         model_to_save.save_pretrained(
             save_dir, state_dict=state_dict
         )
