@@ -4,10 +4,7 @@ import gem
 from gem.wrappers.wrapper_factory import get_wrapper_fns
 
 NUM_ENVS = 16
-ENV_IDS = ["game:GuessTheNumber-v0-random", "game:Sudoku-v0-random"]
-# Backward compatibility: convert string to list if needed
-if isinstance(ENV_IDS, str):
-    ENV_IDS = [ENV_IDS]
+ENV_ID = "game:GuessTheNumber-v0-random"
 WRAPPERS = "concat"
 PROMPT_TEMPLATE = "qwen3_general"
 ENV_POOL = []
@@ -45,14 +42,13 @@ TEMPLATE_FACTORY = {
     "qwen3_game": apply_qwen3_game_template,
     "code": apply_code_template,
 }
-    
+
 for idx in range(NUM_ENVS):
-    env_id = ENV_IDS[idx % len(ENV_IDS)]  # Distribute environments across task types
-    env = gem.make(env_id=env_id, seed=233 + idx)
+    env = gem.make(env_id=ENV_ID, seed=233 + idx)
     wrappers = get_wrapper_fns(WRAPPERS, tokenizer=None)
     for wrapper in wrappers:
         env = wrapper(env)
-    ENV_POOL.append((env, env_id))  # Store env with its ID
+    ENV_POOL.append(env)
 
 AVAILABLE_ENVS = deque(range(NUM_ENVS))
 SEMAPHORE = asyncio.Semaphore(NUM_ENVS)
@@ -64,28 +60,25 @@ async def reset(extra_info):
     async with LOCK:
         env_idx = AVAILABLE_ENVS.popleft()
 
-    env, env_id = ENV_POOL[env_idx]  # Unpack env and its ID
-    state, _ = env.reset()
+    state, _ = ENV_POOL[env_idx].reset()
     state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](state)
     extra_info["env_idx"] = env_idx
-    extra_info["env_id"] = env_id  # Track environment type for metrics
     return state, extra_info
 
 async def step(state, action, extra_info):
 
     env_idx = extra_info["env_idx"]
 
-    env, env_id = ENV_POOL[env_idx]  # Unpack to access env
     (
         next_state,
         reward,
         terminated,
         truncated,
         _
-    ) = env.step(action)
+    ) = ENV_POOL[env_idx].step(action)
     next_state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](next_state)
     done = terminated or truncated
-    
+
     if done:
         async with LOCK:
             AVAILABLE_ENVS.append(env_idx)

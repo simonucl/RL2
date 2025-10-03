@@ -88,10 +88,12 @@ class Rollout:
 
         if "prompt" in data:
             state_text = data["prompt"]
+            env_id = data.get("env_id", "unknown")
         else:
             state_text, data["extra_info"] = await self.env.reset(
                 data["extra_info"]
             )
+            env_id = data["extra_info"].get("env_id", "unknown")
         state_dict = initialize_state_dict(self.tokenizer, state_text)
         env_response = {"extra_info": data["extra_info"]}
         tensor_dicts = []
@@ -144,6 +146,7 @@ class Rollout:
 
         metric["n_turns"].append(turn)
         metric["scores"].append(sum(scores))
+        metric["env_id"] = env_id  # Tag this rollout's environment type
 
         return tensor_dicts, metric
 
@@ -165,11 +168,27 @@ class Rollout:
 
             all_tensor_dicts, metrics = map(list, zip(*outputs))
             suffix = "train" if train else "test"
-            metrics = {
-                f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
-                for k in metrics[0].keys()
-            }
-            gather_and_log(metrics, step)
+
+            # Group metrics by environment type
+            env_grouped_metrics = defaultdict(lambda: defaultdict(list))
+            for metric in metrics:
+                env_id = metric.pop("env_id", "unknown")
+                for k, v in metric.items():
+                    env_grouped_metrics[env_id][k].extend(v if isinstance(v, list) else [v])
+
+            # Log per-environment metrics
+            logged_metrics = {}
+            for env_id, env_metrics in env_grouped_metrics.items():
+                for k, v in env_metrics.items():
+                    logged_metrics[f"{k}/{env_id}/{suffix}"] = v
+
+            # Add aggregated cross-environment metrics
+            all_metrics = {k: sum([metric[k] for metric in metrics], [])
+                          for k in metrics[0].keys() if k != "env_id"}
+            for k, v in all_metrics.items():
+                logged_metrics[f"{k}/all/{suffix}"] = v
+
+            gather_and_log(logged_metrics, step)
 
         dist.barrier()
 
