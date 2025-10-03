@@ -12,17 +12,12 @@ def param_init_fn(module):
 
 def prepare_dp_model(model, device_mesh):
 
-    # Detect if model is a PEFT model
-    is_peft_model = hasattr(model, 'peft_config')
-
     def get_module_cls_from_name(name):
         for module in model.modules():
             if module.__class__.__name__ == name:
                 return module.__class__
 
-    # For PEFT models, need to wrap base_model's layers
-    base_model = model.get_base_model() if is_peft_model else model
-
+    base_model = model.get_base_model() if hasattr(model, 'peft_config') else model
     transformer_layer_cls = {
         get_module_cls_from_name(name)
         for name in base_model._no_split_modules
@@ -47,5 +42,5 @@ def prepare_dp_model(model, device_mesh):
         sync_module_states=device_mesh["tp"].size() == 1,
         device_mesh=device_mesh["ddp", "fsdp"],
         device_id=torch.cuda.current_device(),
-        use_orig_params=True  # Required for LoRA compatibility
+        use_orig_params=True
     )

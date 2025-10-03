@@ -216,7 +216,6 @@ class Rollout:
     @time_logger("update_rollout")
     def update(self, actor, step):
 
-        # Get state dict - merged if LoRA, normal otherwise
         state_dict = get_state_dict(actor)
         torch.cuda.empty_cache()
         dist.barrier()
