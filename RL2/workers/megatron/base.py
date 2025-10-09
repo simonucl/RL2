@@ -1,0 +1,2 @@
+class MegatronWorker:
+    pass

@@ -23,7 +23,7 @@ from RL2.utils.sglang import (
     make_request,
     async_generate
 )
-from RL2.utils.checkpointing import get_state_dict
+from RL2.utils.fsdp.checkpointing import get_state_dict # TODO: move this to worker
 from RL2.utils.logging import time_logger, gather_and_log
 
 

@@ -3,12 +3,12 @@ from collections import defaultdict
 import torch.nn.functional as F
 import torch.distributed as dist
 from tqdm import tqdm
-from RL2.trainer import Trainer
+from .base import Trainer
 from RL2.datasets import DPODataset, get_dataloader
-from RL2.workers import Actor
+from RL2.workers import initialize_actor
 from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.comm import initialize_global_process_group
-from RL2.utils.checkpointing import load_ckpt, save_ckpt, save_model
+from RL2.utils.fsdp.checkpointing import load_ckpt, save_ckpt, save_model # TODO: move this to worker
 from RL2.utils.logging import progress_bar, time_logger, gather_and_log
 
 @time_logger("update_actor")
@@ -46,8 +46,8 @@ class DPOTrainer(Trainer):
     def __init__(self, config):
         super().__init__(config)
 
-        self.actor = Actor(config.actor, True)
-        self.ref_actor = Actor(config.ref_actor, False)
+        self.actor = initialize_actor(config.actor, True)
+        self.ref_actor = initialize_actor(config.ref_actor, False)
         dataset = DPODataset(
             config.data, self.actor.tokenizer
         )

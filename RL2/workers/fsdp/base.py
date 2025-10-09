@@ -2,14 +2,14 @@ import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
 from transformers import AutoTokenizer
-from RL2.utils.data_parallelism import prepare_dp_model
-from RL2.utils.tensor_parallelism import prepare_tp_model
-from RL2.utils.offloading import (
+from RL2.utils.fsdp.data_parallelism import prepare_dp_model
+from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
+from RL2.utils.fsdp.offloading import (
     load_model_to_device,
     optimizer_offloading_manager
 )
 
-class Worker:
+class FSDPWorker:
 
     def __init__(self, config, train: bool):
 

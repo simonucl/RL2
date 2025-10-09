@@ -9,6 +9,7 @@ test_data:
   responses_per_prompt: 1
   
 actor:
+  backend: fsdp
   model_name: null
   use_liger_kernel: false
   gradient_checkpointing: true
@@ -63,6 +64,7 @@ rollout:
   dynamic_filtering: true
 
 ref_actor:
+  backend: ${actor.backend}
   model_name: ${actor.model_name}
   use_liger_kernel: ${actor.use_liger_kernel}
   ddp_size: ${actor.ddp_size}
@@ -73,6 +75,7 @@ ref_actor:
   offload_model: ${actor.offload_model}
 
 critic:
+  backend: ${actor.backend}
   model_name: ${actor.model_name}
   gradient_checkpointing: ${actor.gradient_checkpointing}
   ddp_size: ${actor.ddp_size}

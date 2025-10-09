@@ -1,9 +1,9 @@
 from collections import defaultdict
 import torch
 from transformers import AutoModelForCausalLM
-from RL2.workers import Worker
+from .base import FSDPWorker
 from RL2.utils.sequences import data_manager, count_total
-from RL2.utils.sequence_parallelism import sequence_parallelism_manager
+from RL2.utils.fsdp.sequence_parallelism import sequence_parallelism_manager
 from RL2.utils.functions import (
     compute_logsumexp,
     gather_action_logits,
@@ -11,7 +11,7 @@ from RL2.utils.functions import (
     aggregate_values
 )
 from RL2.utils.algorithms import compute_approx_kl
-from RL2.utils.offloading import (
+from RL2.utils.fsdp.offloading import (
     init_weight_context,
     model_offloading_manager
 )
@@ -23,7 +23,7 @@ from RL2.utils.logging import (
 )
 
 
-class Actor(Worker):
+class FSDPActor(FSDPWorker):
 
     def __init__(self, config, train: bool):
         super().__init__(config, train)
