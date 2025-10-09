@@ -1,7 +1,5 @@
 from hydra.core.hydra_config import HydraConfig
 from .base import Worker
-from .fsdp import FSDPWorker, FSDPActor, FSDPCritic, init_weight_context
-from .megatron import MegatronWorker, MegatronActor, MegatronCritic
 from .rollout import Rollout
 
 def initialize_actor(config, train):
@@ -12,10 +10,10 @@ def initialize_actor(config, train):
         "actor" if train else "ref_actor"
     )
     if backend == "fsdp":
-        from .fsdp import FSDPActor
+        from .fsdp.actor import FSDPActor
         return FSDPActor(config, train)
     elif backend == "megatron":
-        from .megatron import MegatronActor
+        from .megatron.actor import MegatronActor
         return MegatronActor(config, train)
     else:
         raise NotImplementedError
@@ -26,10 +24,10 @@ def initialize_critic(config):
     hydra_config = HydraConfig.get()
     backend = hydra_config.runtime.choices.get("critic")
     if backend == "fsdp":
-        from .fsdp import FSDPCritic
+        from .fsdp.critic import FSDPCritic
         return FSDPCritic(config)
     elif backend == "megatron":
-        from .megatron import MegatronCritic
+        from .megatron.critic import MegatronCritic
         return MegatronCritic(config)
     else:
         raise NotImplementedError

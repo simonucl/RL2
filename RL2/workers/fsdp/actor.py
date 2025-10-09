@@ -2,7 +2,7 @@ from collections import defaultdict
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
-from RL2.workers import FSDPWorker, init_weight_context
+from RL2.workers.fsdp import FSDPWorker, init_weight_context
 from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
 from RL2.utils.functions import (
