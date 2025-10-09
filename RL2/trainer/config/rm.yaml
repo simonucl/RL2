@@ -1,22 +1,11 @@
+defaults:
+- _self_
+- critic: fsdp
+
 data:
   path: null
   max_length: null
   batch_size: 128
-
-critic:
-  backend: fsdp
-  model_name: null
-  gradient_checkpointing: true
-  ddp_size: 1
-  tp_size: 1
-  sp_size: 1
-  max_length_per_device: null
-  lr: 1e-5
-  weight_decay: 1e-2
-  max_grad_norm: 1.0
-  scheduler: cosine
-  warmup_ratio: 0.1
-  offload_optimizer: true
 
 trainer:
   project: null

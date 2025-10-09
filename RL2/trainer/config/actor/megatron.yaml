@@ -1,0 +1,37 @@
+model_name: null
+enable_gradient_checkpointing: true
+gradient_checkpointing_config:
+  recompute_granularity: full
+  recompute_method: uniform
+  recompute_num_layers: 1
+pp_size: 1
+sp_size: 1
+tp_size: 1
+ep_size: 1
+etp_size: 1
+max_length_per_device: null
+max_inference_length_per_device: ${actor.max_length_per_device}
+temperature: ${rollout.train_sampling_params.temperature}
+update_per_rollout: 1
+clip: 0.2
+tis_coef: 0.0
+avg_level: token
+optimizer:
+  lr: 1e-6
+  weight_decay: 1e-2
+max_grad_norm: 1.0
+scheduler: constant
+warmup_ratio: 0.1
+freeze_steps: 0
+offload_model: true
+offload_optimizer: true
+
+kl:
+  coef: 0.0
+  type: null # `reward` or `loss`
+  reward_estimator: k1
+  loss_estimator: k2
+  # `k1`, `k2` or `k3`. See http://joschu.net/blog/kl-approx.html.
+
+entropy:
+  coef: 0.0

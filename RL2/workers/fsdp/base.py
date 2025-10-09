@@ -1,7 +1,8 @@
+from omegaconf import OmegaConf
 import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
-from transformers import AutoTokenizer
+from ..base import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
 from RL2.utils.fsdp.offloading import (
@@ -9,17 +10,7 @@ from RL2.utils.fsdp.offloading import (
     optimizer_offloading_manager
 )
 
-class FSDPWorker:
-
-    def __init__(self, config, train: bool):
-
-        self.config = config
-        self.train = train
-
-        self.prepare_device_mesh()
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            config.model_name, trust_remote_code=True
-        )
+class FSDPWorker(Worker):
 
     def prepare_device_mesh(self):
 
@@ -44,7 +35,7 @@ class FSDPWorker:
 
     def prepare_model_optimizer(self):
 
-        if self.train and self.config.gradient_checkpointing:
+        if self.train and self.config.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
         if self.config.tp_size > 1:
@@ -55,10 +46,11 @@ class FSDPWorker:
         )
 
         if self.train:
+
+            optimizer_config = OmegaConf.to_container(self.config.optimizer)
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
-                lr=self.config.lr,
-                weight_decay=self.config.weight_decay
+                **optimizer_config
             )
 
         load_model_to_device(self, "cpu")

@@ -1,0 +1,19 @@
+model_name: ${actor.model_name}
+enable_gradient_checkpointing: ${actor.enable_gradient_checkpointing}
+gradient_checkpointing_config:
+  recompute_granularity: ${actor.gradient_checkpointing_config.recompute_granularity}
+  recompute_method: ${actor.gradient_checkpointing_config.recompute_method}
+  recompute_num_layers: ${actor.gradient_checkpointing_config.recompute_num_layers}
+max_length_per_device: ${actor.max_length_per_device}
+max_inference_length_per_device: ${critic.max_length_per_device}
+update_per_rollout: ${actor.update_per_rollout}
+clip: 0.5
+avg_level: ${actor.avg_level}
+optimizer:
+  lr: 5e-6
+  weight_decay: ${actor.weight_decay}
+max_grad_norm: ${actor.max_grad_norm}
+scheduler: ${actor.scheduler}
+warmup_ratio: ${actor.warmup_ratio}
+offload_model: ${actor.offload_model}
+offload_optimizer: ${actor.offload_optimizer}
