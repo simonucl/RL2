@@ -9,7 +9,7 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from transformers import AutoModelForSequenceClassification
 from RL2.utils.sglang import make_request
-from RL2.utils.torch.offloading import model_offloading_manager
+from RL2.utils.fsdp.offloading import model_offloading_manager
 
 @model_offloading_manager
 def get_state_dict(worker, full_state_dict=False):
