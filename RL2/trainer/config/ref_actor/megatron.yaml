@@ -1,4 +1,8 @@
 model_name: ${actor.model_name}
+pp_size: ${actor.pp_size}
+sp_size: ${actor.sp_size}
+tp_size: ${actor.tp_size}
+ep_size: ${actor.ep_size}
+etp_size: ${actor.etp_size}
 max_inference_length_per_device: ${actor.max_length_per_device}
-temperature: ${rollout.train_sampling_params.temperature}
 offload_model: ${actor.offload_model}
