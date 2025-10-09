@@ -1,17 +1,15 @@
 from collections import defaultdict
 import torch
+import torch.nn.functional as F
 from transformers import AutoModelForTokenClassification
-from .base import FSDPWorker
+from RL2.workers import FSDPWorker, init_weight_context
 from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.fsdp.sequence_parallelism import sequence_parallelism_manager
 from RL2.utils.functions import aggregate_values
-from RL2.utils.fsdp.offloading import (
-    init_weight_context,
-    model_offloading_manager
-)
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
+    gather_and_log,
     gather_and_reduce,
     rank0_log
 )
@@ -42,22 +40,43 @@ class FSDPCritic(FSDPWorker):
         ).logits.squeeze(-1) * minibatch["action_mask"]
 
     @time_logger("compute_values")
-    @model_offloading_manager
     @torch.no_grad()
     @data_manager(gather=True)
     def compute_values(self, minibatches, step):
-
+        self.load_model_to_device(torch.cuda.current_device())
         self.model.eval()
         for minibatch in progress_bar(minibatches, desc="Compute values"):
             minibatch["values"] = self.forward(minibatch)
-        
+        self.load_model_to_device("cpu")
         return minibatches
 
     @time_logger("update_critic")
-    @model_offloading_manager
-    @data_manager(pack_minibatches=True)
-    def update(self, batches, step: int):
+    @data_manager(pair=True)
+    def rm_update(self, minibatches, step):
 
+        total_pairs = count_total(
+            minibatches, "eos_mask", self.device_mesh["dp"]
+        ) // 2
+        metrics = defaultdict(list)
+        for minibatch in progress_bar(
+            minibatches, desc="Update critic"
+        ):
+            rewards = self.forward(minibatch)
+            chosen_rewards, rejected_rewards = rewards.sum(-1).view(-1, 2).T
+            reward_margins = chosen_rewards - rejected_rewards
+            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            self.backward(loss)
+            metrics["loss"].append(loss.item())
+            metrics["accuray"].extend((reward_margins > 0).tolist())
+
+        grad_norm = self.optimizer_step()
+        metrics["grad_norm"].append(grad_norm)
+        gather_and_log(metrics, step, self.device_mesh["dp"])
+
+    @time_logger("update_critic")
+    @data_manager(pack_minibatches=True)
+    def ppo_update(self, batches, step: int):
+        self.load_model_to_device(torch.cuda.current_device())
         self.model.train()
         tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),
@@ -108,3 +127,4 @@ class FSDPCritic(FSDPWorker):
             metrics["critic/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
+        self.load_model_to_device("cpu")

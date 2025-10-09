@@ -2,18 +2,18 @@ import hydra
 import torch.distributed as dist
 from tqdm import tqdm
 import wandb
-from .base import Trainer
+from RL2.trainer import Trainer
 from RL2.datasets import RLDataset, get_dataloader
 from RL2.workers import (
     initialize_actor,
     initialize_critic,
     Rollout
 )
+from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.algorithms import (
     compute_approx_kl, compute_advantages
 )
-from RL2.utils.comm import initialize_global_process_group
-from RL2.utils.fsdp.checkpointing import load_ckpt, save_ckpt, save_model
+from RL2.utils.sglang import make_request
 from RL2.utils.logging import time_logger
 
 
@@ -52,6 +52,15 @@ class PPOTrainer(Trainer):
             self.config.train_data.prompts_per_rollout
             if train else len(dataset)
         )
+
+    def load_ckpt(self):
+
+        if self.rollout.device_mesh["tp"].get_local_rank() == 0:
+            make_request(
+                self.rollout.worker_url, "release_memory_occupation"
+            )
+        step = super().load_ckpt((self.actor, self.critic))
+        self.rollout.update(self.actor, step)
     
     @time_logger("compute_approx_kl")
     def compute_approx_kl(self, tensor_dict, step):
@@ -69,9 +78,7 @@ class PPOTrainer(Trainer):
             
     def train(self):
 
-        step = load_ckpt(
-            self, (self.actor, self.critic, self.rollout)
-        )
+        step = self.load_ckpt()
         for epoch in range(
             step // len(self.train_dataloader),
             self.config.trainer.n_epochs
@@ -98,11 +105,11 @@ class PPOTrainer(Trainer):
                         self.compute_approx_kl(tensor_dict, step)
                     compute_advantages(self.config.adv, tensor_dict, cu_seqs, step)
 
-                self.actor.update(tensor_dict, step)
+                self.actor.ppo_update(tensor_dict, step)
                 if self.config.adv.estimator == "gae":
-                    self.critic.update(tensor_dict, step)
-                save_ckpt(
-                    self, (self.actor, self.critic), step
+                    self.critic.ppo_update(tensor_dict, step)
+                self.save_ckpt(
+                    (self.actor, self.critic), step
                 )
 
                 self.rollout.update(self.actor, step)
@@ -110,7 +117,7 @@ class PPOTrainer(Trainer):
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)
 
-        save_model(self, self.actor)
+        self.save_model((self.actor, self.critic))
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)

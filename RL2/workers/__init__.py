@@ -1,6 +1,7 @@
 from hydra.core.hydra_config import HydraConfig
-from .fsdp import FSDPActor, FSDPCritic
-from .megatron import MegatronActor, MegatronCritic
+from .base import Worker
+from .fsdp import FSDPWorker, FSDPActor, FSDPCritic, init_weight_context
+from .megatron import MegatronWorker, MegatronActor, MegatronCritic
 from .rollout import Rollout
 
 hydra_config = HydraConfig.get()

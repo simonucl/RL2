@@ -2,14 +2,31 @@ from omegaconf import OmegaConf
 import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
-from transformers import get_scheduler
-from ..base import Worker
+from torch.distributed.fsdp._runtime_utils import _lazy_init
+import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+    set_model_state_dict
+)
+from transformers import (
+    AutoModelForSequenceClassification,
+    get_scheduler
+)
+from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
-from RL2.utils.fsdp.offloading import (
-    load_model_to_device,
-    optimizer_offloading_manager
-)
+
+# TODO: why offloading is incompatible with initialization on meta device?
+def init_weight_context(worker):
+    if any([
+        dist.get_rank() == 0,
+        worker.device_mesh["tp"].size() > 1 and worker.device_mesh["tp"].get_local_rank() == 0,
+        getattr(worker.config, "offload_model", False)
+    ]):
+        return torch.device("cpu")
+    return torch.device("meta")
+
 
 class FSDPWorker(Worker):
 
@@ -54,7 +71,7 @@ class FSDPWorker(Worker):
                 **optimizer_config
             )
 
-        load_model_to_device(self, "cpu")
+        self.load_model_to_device("cpu")
     
     def prepare_scheduler(self, total_steps):
 
@@ -69,18 +86,104 @@ class FSDPWorker(Worker):
             num_training_steps=num_training_steps
         )
 
+    def load_model_to_device(self, device):
+    
+        if not getattr(self.config, "offload_model", False):
+            return
+
+        _lazy_init(self.model, self.model)
+        for handle in self.model._all_handles:
+            if handle._offload_params:
+                continue
+            flat_param = handle.flat_param
+            handle.flat_param_to(device, non_blocking=True)
+            flat_param._local_shard = flat_param.data
+
+    def load_optimizer_to_device(self, device):
+
+        if not getattr(self.config, "offload_optimizer", False):
+            return
+
+        for param_group in self.optimizer.param_groups:
+            for param in param_group["params"]:
+                state = self.optimizer.state[param]
+                for key, value in state.items():
+                    if isinstance(value, torch.Tensor):
+                        state[key] = value.to(
+                            device, non_blocking=True
+                        )
+
     def backward(self, loss):
         # https://github.com/ChenmienTan/RL2/issues/11
         (self.dp_size * self.config.sp_size * loss).backward()
     
-    @optimizer_offloading_manager
     def optimizer_step(self):
 
         grad_norm = clip_grad_norm_(
             self.model.parameters(),
             max_norm=self.config.max_grad_norm
         )
+        self.load_optimizer_to_device(
+            torch.cuda.current_device()
+        )
         self.optimizer.step()
         self.optimizer.zero_grad()
+        self.load_optimizer_to_device("cpu")
         self.scheduler.step()
         return grad_norm.item()
+
+    def get_model_state_dict(self, full_state_dict=False, cpu_offload=True):
+
+        options = StateDictOptions(
+            full_state_dict=full_state_dict,
+            cpu_offload=cpu_offload
+        )
+        self.load_model_to_device(torch.cuda.current_device())
+        state_dict = get_model_state_dict(self.model, options=options)
+        self.load_model_to_device("cpu")
+        return state_dict
+
+    def get_ckpt(self):
+        return {
+            "model": self.get_model_state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict()
+        }
+
+    def load_ckpt(self, checkpoint_id):
+
+        ckpt = self.get_ckpt()
+        dcp.load(ckpt, checkpoint_id=checkpoint_id)
+        self.load_model_to_device(torch.cuda.current_device())
+        set_model_state_dict(self.model, ckpt["model"])
+        self.load_model_to_device("cpu")
+        self.optimizer.load_state_dict(ckpt["optimizer"])
+        self.scheduler.load_state_dict(ckpt["scheduler"])
+
+    def save_ckpt(self, checkpoint_id):
+
+        dcp.save(
+            self.get_ckpt(),
+            checkpoint_id=checkpoint_id
+        )
+
+    def save_model(self, save_dir, rm):
+
+        state_dict = self.get_model_state_dict(full_state_dict=True)
+        if dist.get_rank() == 0:
+
+            self.tokenizer.save_pretrained(save_dir)
+            # unwrap the model
+            model_to_save = self.model.module
+            if rm:
+                # For RM, we load token classification model for simplicity 
+                # but save sequence classification model for compatibility.
+                with torch.device("meta"):
+                    model_to_save = AutoModelForSequenceClassification.from_config(
+                        model_to_save.config
+                    )
+            model_to_save.save_pretrained(
+                save_dir, state_dict=state_dict
+            )
+
+        dist.barrier()

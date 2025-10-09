@@ -1,38 +1,10 @@
 import hydra
-from collections import defaultdict
-import torch.nn.functional as F
 import torch.distributed as dist
 from tqdm import tqdm
-from .base import Trainer
+from RL2.trainer import Trainer
 from RL2.datasets import RMDataset, get_dataloader
 from RL2.workers import initialize_critic
-from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.comm import initialize_global_process_group
-from RL2.utils.fsdp.checkpointing import load_ckpt, save_ckpt, save_model
-from RL2.utils.logging import progress_bar, time_logger, gather_and_log
-
-@time_logger("update_critic")
-@data_manager(pair=True)
-def update(worker, minibatches, step):
-
-    total_pairs = count_total(
-        minibatches, "eos_mask", worker.device_mesh["dp"]
-    ) // 2
-    metrics = defaultdict(list)
-    for minibatch in progress_bar(
-        minibatches, desc="Update critic"
-    ):
-        rewards = worker.forward(minibatch)
-        chosen_rewards, rejected_rewards = rewards.sum(-1).view(-1, 2).T
-        reward_margins = chosen_rewards - rejected_rewards
-        loss = - F.logsigmoid(reward_margins).sum() / total_pairs
-        worker.backward(loss)
-        metrics["loss"].append(loss.item())
-        metrics["accuray"].extend((reward_margins > 0).tolist())
-
-    grad_norm = worker.optimizer_step()
-    metrics["grad_norm"].append(grad_norm)
-    gather_and_log(metrics, step, worker.device_mesh["dp"])
 
 
 class RMTrainer(Trainer):
@@ -53,7 +25,7 @@ class RMTrainer(Trainer):
 
     def train(self):
 
-        step = load_ckpt(self, (self.critic,))
+        step = self.load_ckpt((self.critic,))
         for epoch in range(
             step // len(self.train_dataloader),
             self.config.trainer.n_epochs
@@ -65,9 +37,9 @@ class RMTrainer(Trainer):
                 initial=step % len(self.train_dataloader)
             ):
                 step += 1
-                update(self.critic, tensor_dict, step)
-                save_ckpt(self, (self.critic,), step)
-        save_model(self, self.critic, rm=True)
+                self.critic.rm_update(tensor_dict, step)
+                self.save_ckpt((self.critic,), step)
+        self.save_model((self.critic,), rm=True)
 
 
 @hydra.main(config_path="config", config_name="rm", version_base=None)

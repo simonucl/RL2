@@ -23,7 +23,6 @@ from RL2.utils.sglang import (
     make_request,
     async_generate
 )
-from RL2.utils.fsdp.checkpointing import get_state_dict # TODO: move this to worker
 from RL2.utils.logging import time_logger, gather_and_log
 
 
@@ -216,17 +215,17 @@ class Rollout:
     @time_logger("update_rollout")
     def update(self, actor, step):
 
-        state_dict = get_state_dict(actor)
+        state_dict = actor.get_model_state_dict(cpu_offload=False)
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
+            # TODO: do not resume KV cache here
             make_request(
                 self.worker_url, "resume_memory_occupation"
             )
         
         for idx, (name, tensor) in enumerate(state_dict.items()):
-            tensor = tensor.to(torch.cuda.current_device())
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )

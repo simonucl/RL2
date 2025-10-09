@@ -3,12 +3,12 @@ import math
 import functools
 import torch
 import torch.distributed as dist
-from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 from RL2.utils.comm import (
     split_and_scatter_list,
     boardcast_list,
     gather_and_concat_list
 )
+from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
 def _tensor_dict_to_minibatches(
     worker, tensor_dict, pair: bool

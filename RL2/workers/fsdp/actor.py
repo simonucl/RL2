@@ -1,7 +1,8 @@
 from collections import defaultdict
 import torch
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
-from .base import FSDPWorker
+from RL2.workers import FSDPWorker, init_weight_context
 from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.fsdp.sequence_parallelism import sequence_parallelism_manager
 from RL2.utils.functions import (
@@ -11,13 +12,10 @@ from RL2.utils.functions import (
     aggregate_values
 )
 from RL2.utils.algorithms import compute_approx_kl
-from RL2.utils.fsdp.offloading import (
-    init_weight_context,
-    model_offloading_manager
-)
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
+    gather_and_log,
     gather_and_reduce,
     rank0_log
 )
@@ -75,27 +73,82 @@ class FSDPActor(FSDPWorker):
             return logps
 
     @time_logger("compute_logps")
-    @model_offloading_manager
     @torch.no_grad()
     @data_manager(gather=True)
     def compute_logps(self, minibatches, step):
         prefix = "old" if self.train else "ref"
-
+        self.load_model_to_device(torch.cuda.current_device())
         self.model.eval()
         for minibatch in progress_bar(
             minibatches, desc=f"Compute {prefix} logps"
         ):
             minibatch[f"{prefix}_logps"] = self.forward(minibatch)
-        
+        self.load_model_to_device("cpu")
         return minibatches
+
+    @time_logger("update_actor")
+    @data_manager()
+    def sft_update(self, minibatches, step):
+
+        total_actions, total_sequences = count_total(
+            minibatches,
+            ("action_mask", "eos_mask"),
+            self.device_mesh["dp"]
+        )
+        metrics = defaultdict(list)
+        for minibatch in progress_bar(
+            minibatches, desc="Update actor"
+        ):
+            logps = self.forward(minibatch)
+            loss = aggregate_values(
+                - logps,
+                minibatch["action_mask"],
+                self.config.avg_level,
+                total_actions,
+                total_sequences
+            )
+            self.backward(loss)
+            metrics["loss"].append(loss.item())
+
+        grad_norm = self.optimizer_step()
+        metrics["grad_norm"].append(grad_norm)
+        gather_and_log(metrics, step, self.device_mesh["dp"])
+
+    @time_logger("update_actor")
+    @data_manager(pair=True)
+    def dpo_update(self, minibatches, step):
+
+        total_pairs = count_total(
+            minibatches, "eos_mask", self.device_mesh["dp"]
+        ) // 2
+        metrics = defaultdict(list)
+        for minibatch in progress_bar(
+            minibatches, desc="Update actor"
+        ):
+            logps = self.forward(minibatch)
+            chosen_rewards, rejected_rewards = self.config.beta * (
+                logps - minibatch["ref_logps"]
+            ).sum(-1).view(-1, 2).T
+            reward_margins = chosen_rewards - rejected_rewards
+            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            self.backward(loss)
+
+            metrics["rewards/chosen"].extend(chosen_rewards.tolist())
+            metrics["rewards/rejected"].extend(rejected_rewards.tolist())
+            metrics["rewards/margin"].extend(reward_margins.tolist())
+            metrics["loss"].append(loss.item())
+            metrics["accuray"].extend((reward_margins > 0).tolist())
+
+        grad_norm = self.optimizer_step()
+        metrics["grad_norm"].append(grad_norm)
+        gather_and_log(metrics, step, self.device_mesh["dp"])
     
     @time_logger("update_actor")
-    @model_offloading_manager
     @data_manager(pack_minibatches=True)
-    def update(self, batches, step: int):
+    def ppo_update(self, batches, step: int):
         if step < self.config.freeze_steps:
             return
-
+        self.load_model_to_device(torch.cuda.current_device())
         self.model.train()
         tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),
@@ -165,3 +218,4 @@ class FSDPActor(FSDPWorker):
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
+        self.load_model_to_device("cpu")
