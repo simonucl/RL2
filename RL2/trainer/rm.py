@@ -47,7 +47,9 @@ class RMTrainer(Trainer):
         self.train_dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
-        self.critic.scheduler = self.prepare_scheduler(self.critic)
+        self.critic.prepare_scheduler(
+            self.config.trainer.n_epochs * len(self.train_dataloader)
+        )
 
     def train(self):
 

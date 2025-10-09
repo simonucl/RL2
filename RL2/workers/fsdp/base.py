@@ -2,6 +2,7 @@ from omegaconf import OmegaConf
 import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
+from transformers import get_scheduler
 from ..base import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
@@ -54,7 +55,20 @@ class FSDPWorker(Worker):
             )
 
         load_model_to_device(self, "cpu")
-            
+    
+    def prepare_scheduler(self, total_steps):
+
+        num_training_steps = total_steps * getattr(
+            self.config, "update_per_rollout", 1
+        )
+        num_warmup_steps = int(self.config.warmup_ratio * num_training_steps)
+        self.scheduler = get_scheduler(
+            self.config.scheduler,
+            self.optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps
+        )
+
     def backward(self, loss):
         # https://github.com/ChenmienTan/RL2/issues/11
         (self.dp_size * self.config.sp_size * loss).backward()

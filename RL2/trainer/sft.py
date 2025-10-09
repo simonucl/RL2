@@ -52,7 +52,9 @@ class SFTTrainer(Trainer):
         self.train_dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
-        self.actor.scheduler = self.prepare_scheduler(self.actor)
+        self.actor.prepare_scheduler(
+            self.config.trainer.n_epochs * len(self.train_dataloader)
+        )
 
     def train(self):
 

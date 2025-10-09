@@ -25,12 +25,16 @@ class PPOTrainer(Trainer):
         self.actor = initialize_actor(config.actor, True)
         self.train_dataloader = self.get_dataloader(True)
         self.test_dataloader = self.get_dataloader(False)
-        self.actor.scheduler = self.prepare_scheduler(self.actor)
+        self.actor.prepare_scheduler(
+            self.config.trainer.n_epochs * len(self.train_dataloader)
+        )
         if config.actor.kl.coef > 0:
             self.ref_actor = initialize_actor(config.ref_actor, False)
         if config.adv.estimator == "gae":
             self.critic = initialize_critic(config.critic)
-            self.critic.scheduler = self.prepare_scheduler(self.critic)
+            self.critic.prepare_scheduler(
+                self.config.trainer.n_epochs * len(self.train_dataloader)
+            )
         else:
             self.critic = None
         self.rollout = Rollout(config.rollout)    
