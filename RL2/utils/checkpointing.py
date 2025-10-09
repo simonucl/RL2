@@ -68,11 +68,14 @@ def get_ckpt(trainer, workers, step):
 def load_worker_ckpt(worker, ckpt):
 
     if hasattr(worker.model, 'peft_config'):
-        from peft import set_peft_model_state_dict as set_model_state_dict
-
-    set_model_state_dict(
-        worker.model, ckpt["model"]
-    )
+        from peft import set_peft_model_state_dict
+        set_peft_model_state_dict(
+            worker.model, ckpt["model"]
+        )
+    else:
+        set_model_state_dict(
+            worker.model, ckpt["model"]
+        )
     worker.optimizer.load_state_dict(ckpt["optimizer"])
     worker.scheduler.load_state_dict(ckpt["scheduler"])
 

@@ -85,13 +85,26 @@ def launch_router_process(worker_urls):
     assert process.is_alive()
     return f"http://{router_args.host}:{router_args.port}"
 
-def make_request(url, endpoint, payload=None):
-
-    response = requests.post(
-        f"{url}/{endpoint}",
-        json=payload or {}
-    )
-    response.raise_for_status()
+def make_request(url, endpoint, payload=None, max_retries=5, retry_delay=2):
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{url}/{endpoint}",
+                json=payload or {},
+                timeout=30
+            )
+            response.raise_for_status()
+            return response
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt == max_retries - 1:
+                print(f"Failed to connect to {url}/{endpoint} after {max_retries} attempts: {e}")
+                raise
+            print(f"Connection attempt {attempt + 1} failed, retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTP error for {url}/{endpoint}: {e}")
+            raise
 
 async def async_generate(url, states, sampling_params):
 

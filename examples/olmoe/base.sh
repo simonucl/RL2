@@ -1,4 +1,5 @@
-export no_proxy=127.0.0.1:7890,localhost,127.0.0.1,10.99.103.147,10.99.103.*
+# export no_proxy=127.0.0.1:7890,localhost,127.0.0.1,10.99.103.147,10.99.103.*
+export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
 
 torchrun \
     --nproc_per_node=8 \

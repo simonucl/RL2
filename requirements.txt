@@ -8,6 +8,5 @@ peft
 liger_kernel
 sglang[all]==0.5.2
 wandb
-flash-attn==2.8.3
 torchdata
 sglang_router
