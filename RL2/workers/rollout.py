@@ -220,9 +220,10 @@ class Rollout:
         dist.barrier()
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
-            # TODO: do not resume KV cache here
             make_request(
-                self.worker_url, "resume_memory_occupation"
+                self.worker_url,
+                "resume_memory_occupation",
+                {"tags": ["weights"]}
             )
         
         for idx, (name, tensor) in enumerate(state_dict.items()):
@@ -258,3 +259,10 @@ class Rollout:
                     self.worker_url, "update_weights_from_tensor", payload
                 )
         dist.barrier()
+        state_dict.clear()
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            make_request(
+                self.worker_url,
+                "resume_memory_occupation",
+                {"tags": ["kv_cache"]}
+            )
