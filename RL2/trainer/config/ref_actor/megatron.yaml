@@ -1,6 +1,6 @@
 model_name: ${actor.model_name}
 pp_size: ${actor.pp_size}
-sp_size: ${actor.sp_size}
+cp_size: ${actor.cp_size}
 tp_size: ${actor.tp_size}
 ep_size: ${actor.ep_size}
 etp_size: ${actor.etp_size}

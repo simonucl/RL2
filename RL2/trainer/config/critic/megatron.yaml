@@ -5,7 +5,7 @@ gradient_checkpointing_config:
   recompute_method: uniform
   recompute_num_layers: 1
 pp_size: 1
-sp_size: 1
+cp_size: 1
 tp_size: 1
 ep_size: 1
 etp_size: 1

@@ -2,7 +2,7 @@ model_name: null
 enable_gradient_checkpointing: true
 ddp_size: 1
 tp_size: 1
-sp_size: 1
+cp_size: 1
 max_length_per_device: null
 optimizer:
   lr: 5e-6

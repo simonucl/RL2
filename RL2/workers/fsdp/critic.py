@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from transformers import AutoModelForTokenClassification
 from RL2.workers import FSDPWorker, init_weight_context
 from RL2.utils.sequences import data_manager, count_total
-from RL2.utils.fsdp.sequence_parallelism import sequence_parallelism_manager
+from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
 from RL2.utils.functions import aggregate_values
 from RL2.utils.logging import (
     progress_bar,
@@ -30,7 +30,7 @@ class FSDPCritic(FSDPWorker):
 
         self.prepare_model_optimizer()
 
-    @sequence_parallelism_manager
+    @context_parallelism_manager
     def forward(self, minibatch) -> torch.Tensor:
 
         return self.model(

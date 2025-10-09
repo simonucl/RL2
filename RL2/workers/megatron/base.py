@@ -26,7 +26,7 @@ class MegatronWorker(Worker):
         if not mpu.is_initialized():
             mpu.initialize_model_parallel(
                 pipeline_model_parallel_size=self.config.pp_size,
-                context_parallel_size=self.config.sp_size,
+                context_parallel_size=self.config.cp_size,
                 tensor_parallel_size=self.config.tp_size,
                 expert_model_parallel_size=self.config.ep_size,
                 expert_tensor_parallel_size=self.config.etp_size

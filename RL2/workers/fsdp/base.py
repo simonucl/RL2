@@ -42,13 +42,13 @@ class FSDPWorker(Worker):
             mesh_shape=(self.config.ddp_size, self.fsdp_size, self.config.tp_size)
         )
 
-        assert world_size % (self.config.sp_size * self.config.tp_size) == 0, \
-            f"World_size {world_size} must be divisible by sp_size {self.config.sp_size} * tp_size {self.config.tp_size}."
-        self.dp_size = world_size // (self.config.sp_size * self.config.tp_size)
+        assert world_size % (self.config.cp_size * self.config.tp_size) == 0, \
+            f"World_size {world_size} must be divisible by cp_size {self.config.cp_size} * tp_size {self.config.tp_size}."
+        self.dp_size = world_size // (self.config.cp_size * self.config.tp_size)
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
-            mesh_dim_names=("dp", "sp", "tp"),
-            mesh_shape=(self.dp_size, self.config.sp_size, self.config.tp_size)
+            mesh_dim_names=("dp", "cp", "tp"),
+            mesh_shape=(self.dp_size, self.config.cp_size, self.config.tp_size)
         )
 
     def prepare_model_optimizer(self):
@@ -115,7 +115,7 @@ class FSDPWorker(Worker):
 
     def backward(self, loss):
         # https://github.com/ChenmienTan/RL2/issues/11
-        (self.dp_size * self.config.sp_size * loss).backward()
+        (self.dp_size * self.config.cp_size * loss).backward()
     
     def optimizer_step(self):
 

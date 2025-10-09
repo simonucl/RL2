@@ -6,7 +6,7 @@ torchrun \
     train_data.responses_per_prompt=64 \
     test_data.path=Chenmien/OlympiadBench \
     actor.model_name=Qwen/Qwen2.5-7B \
-    actor.sp_size=2 \
+    actor.cp_size=2 \
     actor.max_length_per_device=8192 \
     actor.freeze_steps=4 \
     rollout.train_sampling_params.max_new_tokens=8192 \

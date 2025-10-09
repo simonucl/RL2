@@ -2,6 +2,6 @@ model_name: ${actor.model_name}
 use_liger_kernel: ${actor.use_liger_kernel}
 ddp_size: ${actor.ddp_size}
 tp_size: ${actor.tp_size}
-sp_size: ${actor.sp_size}
+cp_size: ${actor.cp_size}
 max_inference_length_per_device: ${actor.max_length_per_device}
 offload_model: true

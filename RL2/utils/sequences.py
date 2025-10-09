@@ -31,7 +31,7 @@ def _tensor_dict_to_minibatches(
         # When pair, every two adjacent sequences will be colocated, so 
         # their length are summed.
         seq_len_list = torch.tensor(seq_len_list).view(-1, 2).sum(-1).tolist()
-    max_length_per_dp = worker.device_mesh["sp"].size() * worker.device_mesh["tp"].size() * (
+    max_length_per_dp = worker.device_mesh["cp"].size() * worker.device_mesh["tp"].size() * (
         worker.config.max_length_per_device
         if torch.is_grad_enabled()
         else worker.config.max_inference_length_per_device
@@ -121,7 +121,7 @@ def tensor_dict_to_minibatches(
             ]
 
     if worker.device_mesh["tp"].get_local_rank() == 0:
-        if worker.device_mesh["sp"].get_local_rank() == 0:
+        if worker.device_mesh["cp"].get_local_rank() == 0:
             if worker.device_mesh["dp"].get_local_rank() == 0:
                 minibatches = _tensor_dict_to_minibatches(
                     worker, tensor_dict, pair
@@ -134,9 +134,9 @@ def tensor_dict_to_minibatches(
             )
         minibatches = boardcast_list(
             minibatches
-            if worker.device_mesh["sp"].get_local_rank() == 0
+            if worker.device_mesh["cp"].get_local_rank() == 0
             else None,
-            worker.device_mesh["sp"]
+            worker.device_mesh["cp"]
         )
     minibatches = boardcast_list(
         minibatches

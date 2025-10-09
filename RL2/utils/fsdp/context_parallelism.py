@@ -76,10 +76,10 @@ def _flash_attention_forward(
 transformers.modeling_flash_attention_utils._flash_attention_forward = _flash_attention_forward
 ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
 
-def sequence_parallelism_manager(func):
+def context_parallelism_manager(func):
 
     @functools.wraps(func)
-    def forward_with_sequence_parallelism(
+    def forward_with_context_parallelism(
         worker, minibatch, *args, **kwargs
     ):
         shape = minibatch["states"].shape
@@ -91,7 +91,7 @@ def sequence_parallelism_manager(func):
             for k, v in minibatch.items()
         }
 
-        multiple_of = worker.device_mesh["sp"].size() * worker.device_mesh["tp"].size()
+        multiple_of = worker.device_mesh["cp"].size() * worker.device_mesh["tp"].size()
         if sum(seq_lens) % multiple_of != 0:
             pad_tokens = multiple_of - sum(seq_lens) % multiple_of
             seq_lens = torch.cat((
@@ -114,8 +114,8 @@ def sequence_parallelism_manager(func):
             dim=0,
             dtype=torch.int32
         )
-        rank = worker.device_mesh["sp"].get_local_rank()
-        world_size = worker.device_mesh["sp"].size()
+        rank = worker.device_mesh["cp"].get_local_rank()
+        world_size = worker.device_mesh["cp"].size()
         (
             cu_seqlens_q,
             cu_seqlens_k,
@@ -129,7 +129,7 @@ def sequence_parallelism_manager(func):
             world_size
         )
         DATA_PARAMS.update({
-            "group": worker.device_mesh["sp"].get_group(),
+            "group": worker.device_mesh["cp"].get_group(),
             "cu_seqlens_q": cu_seqlens_q,
             "cu_seqlens_k": cu_seqlens_k,
             "max_seqlen_q": max_seqlen_q,
@@ -158,7 +158,7 @@ def sequence_parallelism_manager(func):
             dist.all_gather(
                 tensors,
                 output,
-                group=worker.device_mesh["sp"].get_group()
+                group=worker.device_mesh["cp"].get_group()
             )
             tensors[rank] = output # necessary to retain grad
             tensor = torch.cat(tensors, -1).squeeze(0)
@@ -173,4 +173,4 @@ def sequence_parallelism_manager(func):
 
         return postprocess(output)
     
-    return forward_with_sequence_parallelism
+    return forward_with_context_parallelism
