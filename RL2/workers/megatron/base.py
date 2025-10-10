@@ -6,7 +6,7 @@ from megatron.core import (
 )
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from mbridge import AutoBridge
-from ..base import Worker
+from RL2.workers import Worker
 
 class MegatronWorker(Worker):
 
@@ -15,12 +15,9 @@ class MegatronWorker(Worker):
         
         config = AutoConfig.from_pretrained(config.model_name)
         self.bridge = AutoBridge.from_config(config)
-        if train and config.enable_gradient_checkpointing:
-            gradient_checkpointing_config = OmegaConf.to_container(
-                self.config.gradient_checkpointing_config
-            )
-            self.bridge.set_extra_args(**gradient_checkpointing_config)
-        
+        tf_config = OmegaConf.to_container(self.config.tf_config)
+        self.bridge.set_extra_args(**tf_config)
+
     def prepare_device_mesh(self):
 
         if not mpu.is_initialized():
@@ -33,7 +30,7 @@ class MegatronWorker(Worker):
             )
             tensor_parallel.model_parallel_cuda_manual_seed(42)
 
-    def prepare_device_mesh(self):
+    def prepare_model_optimizer(self):
         
         self.bridge.load_weights(self.model, self.config.model_name)
 

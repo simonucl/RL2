@@ -1,6 +1,7 @@
 model_name: null
-enable_gradient_checkpointing: true
-gradient_checkpointing_config:
+tf_config:
+  bf16: true
+  attention_backend: flash
   recompute_granularity: full
   recompute_method: uniform
   recompute_num_layers: 1
@@ -8,7 +9,7 @@ pp_size: 1
 cp_size: 1
 tp_size: 1
 ep_size: 1
-etp_size: 1
+etp_size: null
 max_length_per_device: null
 optimizer:
   lr: 1e-6
