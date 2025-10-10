@@ -11,6 +11,7 @@ torchrun \
     actor.model_name=simonycl/OLMoE-1B-7B-0125 \
     actor.sp_size=2 \
     actor.max_length_per_device=4096 \
+    +actor.track_tis=true \
     rollout.train_sampling_params.max_new_tokens=3072 \
     rollout.env_path=envs/orz.py \
     +rollout.server_args.context_length=8192 \
