@@ -47,8 +47,8 @@ class FSDPWorker(Worker):
         self.dp_size = world_size // (self.config.cp_size * self.config.tp_size)
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
-            mesh_dim_names=("dp", "cp", "tp"),
-            mesh_shape=(self.dp_size, self.config.cp_size, self.config.tp_size)
+            mesh_dim_names=("pp", "dp", "cp", "tp"),
+            mesh_shape=(1, self.dp_size, self.config.cp_size, self.config.tp_size)
         )
 
     def prepare_model_optimizer(self):

@@ -6,10 +6,7 @@ from RL2.workers.fsdp import FSDPWorker, init_weight_context
 from RL2.utils.sequences import data_manager, count_total
 from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
 from RL2.utils.functions import (
-    compute_logsumexp,
-    gather_action_logits,
-    compute_entropy,
-    aggregate_values
+    compute_logps_and_entropy, aggregate_values
 )
 from RL2.utils.algorithms import compute_approx_kl
 from RL2.utils.logging import (
@@ -55,22 +52,12 @@ class FSDPActor(FSDPWorker):
         )
         # bfloat16 is unstable for the subsequent `logsumexp` operation.
         # See https://github.com/OpenRLHF/OpenRLHF/pull/634.
-        
-        logsumexp = compute_logsumexp(logits, self.device_mesh["tp"])
-        action_logits = gather_action_logits(
+        return compute_logps_and_entropy(
             logits,
-            minibatch["actions"],
-            self.device_mesh["tp"]
+            minibatch,
+            self.device_mesh["tp"],
+            return_entropy
         )
-        logps = (action_logits - logsumexp) * minibatch["action_mask"]
-        
-        if return_entropy:
-            entropy = compute_entropy(
-                logits, logsumexp, self.device_mesh["tp"]
-            ) * minibatch["action_mask"]
-            return logps, entropy
-        else:
-            return logps
 
     @time_logger("compute_logps")
     @torch.no_grad()

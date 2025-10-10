@@ -76,6 +76,26 @@ def compute_entropy(logits, logsumexp, device_mesh):
         (probs * logits).sum(-1), device_mesh
     )
 
+def compute_logps_and_entropy(
+    logits, minibatch, device_mesh, return_entropy=False
+):
+            
+    logsumexp = compute_logsumexp(logits, device_mesh)
+    action_logits = gather_action_logits(
+        logits,
+        minibatch["actions"],
+        device_mesh
+    )
+    logps = (action_logits - logsumexp) * minibatch["action_mask"]
+
+    if return_entropy:
+        entropy = compute_entropy(
+            logits, logsumexp, device_mesh
+        ) * minibatch["action_mask"]
+        return logps, entropy
+    else:
+        return logps
+
 def aggregate_values(
     tensor,
     action_mask,

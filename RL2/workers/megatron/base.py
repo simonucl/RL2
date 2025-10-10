@@ -1,3 +1,4 @@
+from functools import partial
 from omegaconf import OmegaConf
 from transformers import AutoConfig
 from megatron.core import (
@@ -7,6 +8,22 @@ from megatron.core import (
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from mbridge import AutoBridge
 from RL2.workers import Worker
+from RL2.utils.megatron.context_parallelism import slide_along_cp
+
+def forward_step(f, data_iterator, model):
+
+    minibatch = next(data_iterator)
+    minibatch, packed_seq_params = slide_along_cp(minibatch)
+    output_tensor = model(
+        input_ids=minibatch["states"],
+        attention_mask=None,
+        position_ids=None,
+        labels=None,
+        packed_seq_params=packed_seq_params
+    )
+
+    return output_tensor, partial(f, minibatch)
+
 
 class MegatronWorker(Worker):
 
@@ -30,6 +47,13 @@ class MegatronWorker(Worker):
             )
             tensor_parallel.model_parallel_cuda_manual_seed(42)
 
+        self.device_mesh = {
+            "pp": mpu.get_pipeline_model_parallel_group(),
+            "dp": mpu.get_data_parallel_group(),
+            "cp": mpu.get_context_parallel_group(),
+            "tp": mpu.get_tensor_model_parallel_group()
+        }
+
     def prepare_model_optimizer(self):
         
         self.bridge.load_weights(self.model, self.config.model_name)
@@ -42,8 +66,5 @@ class MegatronWorker(Worker):
                 **optimizer_config
             )
             self.optimizer = get_megatron_optimizer(
-                optimizer_config,
-                self.model
+                optimizer_config, self.model
             )
-
-        # TODO: offload to CPU

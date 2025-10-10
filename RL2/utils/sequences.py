@@ -120,29 +120,36 @@ def tensor_dict_to_minibatches(
                 for _ in range(worker.config.update_per_rollout)
             ]
 
-    if worker.device_mesh["tp"].get_local_rank() == 0:
-        if worker.device_mesh["cp"].get_local_rank() == 0:
-            if worker.device_mesh["dp"].get_local_rank() == 0:
-                minibatches = _tensor_dict_to_minibatches(
-                    worker, tensor_dict, pair
+    if worker.device_mesh["pp"].get_local_rank() == 0:
+        if worker.device_mesh["tp"].get_local_rank() == 0:
+            if worker.device_mesh["cp"].get_local_rank() == 0:
+                if worker.device_mesh["dp"].get_local_rank() == 0:
+                    minibatches = _tensor_dict_to_minibatches(
+                        worker, tensor_dict, pair
+                    )
+                minibatches = split_and_scatter_list(
+                    minibatches
+                    if worker.device_mesh["dp"].get_local_rank() == 0
+                    else None,
+                    worker.device_mesh["dp"]
                 )
-            minibatches = split_and_scatter_list(
+            minibatches = boardcast_list(
                 minibatches
-                if worker.device_mesh["dp"].get_local_rank() == 0
+                if worker.device_mesh["cp"].get_local_rank() == 0
                 else None,
-                worker.device_mesh["dp"]
+                worker.device_mesh["cp"]
             )
         minibatches = boardcast_list(
             minibatches
-            if worker.device_mesh["cp"].get_local_rank() == 0
+            if worker.device_mesh["tp"].get_local_rank() == 0
             else None,
-            worker.device_mesh["cp"]
+            worker.device_mesh["tp"]
         )
     minibatches = boardcast_list(
         minibatches
-        if worker.device_mesh["tp"].get_local_rank() == 0
+        if worker.device_mesh["pp"].get_local_rank() == 0
         else None,
-        worker.device_mesh["tp"]
+        worker.device_mesh["pp"]
     )
     return [
         {

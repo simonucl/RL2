@@ -7,6 +7,7 @@ class MegatronCritic(MegatronWorker):
         super().__init__(config, True)
 
         self.model = self.bridge.get_model(
+            wrap_with_ddp=True,
             post_model_creation_callbacks=[
                 make_value_model
             ]
