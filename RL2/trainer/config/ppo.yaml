@@ -58,11 +58,11 @@ actor:
     coef: 0.0
 
 rollout:
-  server_args:
-    model_path: ${actor.model_name}
-    dtype: bfloat16
-    tp_size: 1
-    mem_fraction_static: 0.6
+  model_name: ${actor.model_name}
+  dtype: bfloat16
+  tp_size: 1
+  gpu_memory_utilization: 0.6
+  base_port: 30000
   responses_per_prompt: ${train_data.responses_per_prompt}
   train_sampling_params:
     temperature: 1.0

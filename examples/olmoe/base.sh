@@ -14,7 +14,7 @@ torchrun \
     +actor.track_tis=true \
     rollout.train_sampling_params.max_new_tokens=3072 \
     rollout.env_path=envs/orz.py \
-    +rollout.server_args.context_length=8192 \
+    +rollout.context_length=8192 \
     adv.estimator=reinforce \
     trainer.project=OpenMoERL \
     trainer.experiment_name=olmoe-1b-7b-0125-base \

@@ -8,7 +8,6 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict
 )
 from transformers import AutoModelForSequenceClassification
-from RL2.utils.sglang import make_request
 from RL2.utils.offloading import model_offloading_manager
 
 def extract_base_layer_weights(state_dict):
@@ -100,9 +99,7 @@ def load_ckpt(trainer, workers):
             load_worker_ckpt(worker, ckpt[f"worker{idx}"])
         elif worker.__class__.__name__ == "Rollout":
             if worker.device_mesh["tp"].get_local_rank() == 0:
-                make_request(
-                    worker.worker_url, "release_memory_occupation"
-                )
+                worker.llm.release_memory_occupation()
             worker.update(workers[0], ckpt["step"])
 
     return ckpt["step"]
