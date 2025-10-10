@@ -208,7 +208,7 @@ class Rollout(Worker):
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            gather_and_log(metrics, self.device_mesh["dp"], step)
+            gather_and_log(metrics, step, self.device_mesh["dp"])
 
             if not train:
                 return
