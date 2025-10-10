@@ -22,7 +22,7 @@ def forward_step(f, data_iterator, model):
         packed_seq_params=packed_seq_params
     )
 
-    return output_tensor, partial(f, minibatch)
+    return output_tensor, partial(f, minibatch, packed_seq_params)
 
 
 class MegatronWorker(Worker):

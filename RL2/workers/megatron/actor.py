@@ -35,7 +35,7 @@ class MegatronActor(MegatronWorker):
             self.device_mesh["dp"]
         )
 
-        def loss_func(minibatch, logits):
+        def loss_func(minibatch, packed_seq_lens, logits):
 
             minibatch["logps"] = compute_logps_and_entropy(
                 logits,
@@ -43,7 +43,7 @@ class MegatronActor(MegatronWorker):
                 mpu.get_tensor_model_parallel_group(),
                 return_entropy=False
             )
-            minibatch = gather_along_cp(minibatch)
+            minibatch = gather_along_cp(minibatch, packed_seq_lens)
             loss = aggregate_values(
                 - minibatch["logps"],
                 minibatch["action_mask"],
