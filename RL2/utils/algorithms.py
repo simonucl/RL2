@@ -20,6 +20,16 @@ def dpo_loss(logps, ref_logps, beta):
     }
     return loss, metrics
 
+def ppo_loss(logps, old_logps, advantages, clip):
+
+    ratio = torch.exp(logps - old_logps)
+    clipped_ratio = torch.clamp(ratio, 1 - clip, 1 + clip)
+    objective = advantages * ratio
+    clipped_objective = advantages * clipped_ratio
+    losses = - torch.min(objective, clipped_objective)
+    clip_ratios = objective > clipped_objective
+    return losses, clip_ratios
+# TODO: support more loss func
 def compute_approx_kl(
     logps: torch.Tensor,
     ref_logps: torch.Tensor,
@@ -41,10 +51,7 @@ def compute_approx_kl(
 def compute_gae(tensor_dict, gamma, lamda):
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
-    next_values = torch.cat((
-        tensor_dict["values"][:, 1:],
-        torch.zeros((tensor_dict["values"].shape[0], 1))
-    ), -1)
+    next_values = F.pad(tensor_dict["values"][:, 1:], (0, 1), value=0)
     deltas = tensor_dict["rewards"] + gamma * next_values - tensor_dict["values"]
 
     # A_t = \delta_t + \gamma * \lambda * A_{t+1}
@@ -89,10 +96,10 @@ def compute_reinforce_adv(
 
 @time_logger("compute_advantages")
 def compute_advantages(
-    config, raw_tensor_dict, cu_seqs, step
+    config, tensor_dict, cu_seqs, step
 ):
 
-    def _extract_actions(tensor_dict):
+    def extract_actions(tensor_dict):
 
         indices = torch.where(tensor_dict["action_mask"])
         return {
@@ -100,23 +107,23 @@ def compute_advantages(
             for k, v in tensor_dict.items()
         }
     
-    tensor_dict = pack_tensor_dicts([
-        _extract_actions(
+    processed_tensor_dict = pack_tensor_dicts([
+        extract_actions(
             {
-                k: v[start_idx:end_idx]
-                for k, v in raw_tensor_dict.items()
+                k: v[start:end]
+                for k, v in tensor_dict.items()
             }
         )
-        for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
+        for start, end in zip(cu_seqs[:-1], cu_seqs[1:])
     ])
 
     if config.estimator == "gae":
         tensor_dict_delta = compute_gae(
-            tensor_dict, config.gamma, config.lamda
+            processed_tensor_dict, config.gamma, config.lamda
         )
     elif config.estimator == "reinforce":
         tensor_dict_delta = compute_reinforce_adv(
-            tensor_dict,
+            processed_tensor_dict,
             config.responses_per_prompt,
             config.global_norm,
             config.norm_var
@@ -125,9 +132,9 @@ def compute_advantages(
         raise NotImplementedError
 
     for k, v in tensor_dict_delta.items():
-        raw_tensor_dict[k] = torch.zeros(raw_tensor_dict["states"].shape)
-        for idx, (start_idx, end_idx) in enumerate(
+        tensor_dict[k] = torch.zeros(tensor_dict["states"].shape)
+        for idx, (start, end) in enumerate(
             zip(cu_seqs[:-1], cu_seqs[1:])
         ):
-            indices = torch.where(raw_tensor_dict["action_mask"][start_idx:end_idx])
-            raw_tensor_dict[k][start_idx:end_idx][indices] = v[idx][:len(indices[0])]
+            indices = torch.where(tensor_dict["action_mask"][start:end])
+            tensor_dict[k][start:end][indices] = v[idx][:len(indices[0])]

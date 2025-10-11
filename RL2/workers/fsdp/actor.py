@@ -9,6 +9,7 @@ from RL2.utils.functions import (
 )
 from RL2.utils.algorithms import (
     dpo_loss,
+    ppo_loss,
     compute_approx_kl
 )
 from RL2.utils.logging import (
@@ -117,7 +118,9 @@ class FSDPActor(FSDPWorker):
             minibatches, desc="Update actor"
         ):
             logps = self.forward(minibatch)
-            loss, metric = dpo_loss(logps, minibatch["ref_logps"], self.config.beta)
+            loss, metric = dpo_loss(
+                logps, minibatch["ref_logps"], self.config.beta
+            )
             self.scale_loss(loss.sum() / total_pairs).backward()
             for k, v in metric.items():
                 metrics[k].extend(v)
@@ -152,16 +155,12 @@ class FSDPActor(FSDPWorker):
                 logps, entropy = self.forward(
                     minibatch, return_entropy=True
                 )
-                ratio = torch.exp(
-                    logps - minibatch.get("old_logps", logps.detach())
+                losses, clip_ratios = ppo_loss(
+                    logps,
+                    minibatch.get("old_logps", logps.detach()),
+                    minibatch["advantages"],
+                    self.config.clip
                 )
-                clipped_ratio = torch.clamp(
-                    ratio, 1 - self.config.clip, 1 + self.config.clip
-                )
-                objective = minibatch["advantages"] * ratio
-                clipped_objective = minibatch["advantages"] * clipped_ratio
-                losses = - torch.min(objective, clipped_objective)
-                clip_ratios = objective > clipped_objective
 
                 if self.config.tis_coef > 0:
                     # https://fengyao.notion.site/off-policy-rl
