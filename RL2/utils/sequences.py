@@ -6,7 +6,12 @@ import torch.distributed as dist
 from RL2.utils.commication import gather_and_concat_list
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
-def tensor_dict_to_minibatches(tensor_dict, dp_size, max_length_per_dp, pair: bool):
+def tensor_dict_to_minibatches(
+    tensor_dict,
+    dp_size,
+    max_length_per_dp,
+    pair: bool
+):
 
     # We pack sequences into minibatches for higher throughput.
     # There are two constrains:
