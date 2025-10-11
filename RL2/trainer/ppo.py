@@ -8,7 +8,7 @@ from RL2.datasets import RLDataset, get_dataloader
 from RL2.workers import (
     initialize_actor,
     initialize_critic,
-    Rollout
+    initialize_rollout
 )
 from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.algorithms import (
@@ -38,7 +38,7 @@ class PPOTrainer(Trainer):
             )
         else:
             self.critic = None
-        self.rollout = Rollout(config.rollout)    
+        self.rollout = initialize_rollout(config.rollout)    
 
     def get_dataloader(self, train: bool):
 

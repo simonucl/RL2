@@ -1,6 +1,5 @@
 from hydra.core.hydra_config import HydraConfig
 from .base import Worker
-from .rollout import Rollout
 
 def initialize_actor(config, train):
 
@@ -31,3 +30,8 @@ def initialize_critic(config):
         return MegatronCritic(config)
     else:
         raise NotImplementedError
+
+def initialize_rollout(config):
+
+    from .rollout import Rollout
+    return Rollout(config)
