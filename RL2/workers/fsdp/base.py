@@ -101,8 +101,7 @@ class FSDPWorker(Worker):
         )
         return scatter_data(
             tensor_dict,
-            self.device_mesh["dp"].get_local_rank(),
-            self.device_mesh["dp"].size(),
+            self.device_mesh["dp"].get_group(),
             max_length_per_dp,
             self.config.update_per_rollout if pack_minibatches else 1,
             pair

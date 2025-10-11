@@ -100,8 +100,7 @@ class MegatronWorker(Worker):
         )
         return scatter_data(
             tensor_dict,
-            mpu.get_data_parallel_rank(),
-            mpu.get_data_parallel_world_size(),
+            mpu.get_data_parallel_group(),
             max_length_per_dp,
             self.config.update_per_rollout if pack_minibatches else 1,
             pair

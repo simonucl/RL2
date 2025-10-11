@@ -78,8 +78,7 @@ def tensor_dict_to_minibatches(tensor_dict, dp_size, max_length_per_dp, pair: bo
 
 def scatter_data(
     tensor_dict,
-    dp_rank,
-    dp_size,
+    process_group,
     max_length_per_dp,
     num_batches : int = 1,
     pair : bool = False
@@ -96,16 +95,18 @@ def scatter_data(
                 }
                 batches.append(
                     scatter_data(
-                        batch_tensor_dict, dp_rank, dp_size, max_length_per_dp, pair=pair
+                        batch_tensor_dict, process_group, max_length_per_dp, pair=pair
                     )
                 )
             return batches
         else:
             return [
-                scatter_data(None, dp_rank, dp_size, max_length_per_dp, pair=pair)
+                scatter_data(None, process_group, max_length_per_dp, pair=pair)
                 for _ in range(num_batches)
             ]
 
+    dp_rank = dist.get_rank(process_group)
+    dp_size = dist.get_world_size(process_group)
     if dist.get_rank() == 0:
         minibatches = tensor_dict_to_minibatches(
             tensor_dict, dp_size, max_length_per_dp, pair
