@@ -1,6 +1,9 @@
 from omegaconf import OmegaConf
+import time
 import base64
 import asyncio
+import aiohttp
+import requests
 import importlib
 from collections import defaultdict
 import torch
@@ -19,9 +22,7 @@ from RL2.datasets import (
 from RL2.utils.sglang import (
     prepare_environment_variables,
     launch_server_process,
-    launch_router_process,
-    make_request,
-    async_generate
+    launch_router_process
 )
 from RL2.utils.logging import time_logger, gather_and_log
 
@@ -32,7 +33,7 @@ class Rollout:
         
         self.config = config
         self.prepare_device_mesh()
-        prepare_environment_variables(self.device_mesh["tp"])
+        prepare_environment_variables(self.device_mesh["tp"].get_group())
         if self.device_mesh["tp"].get_local_rank() == 0:
 
             self.worker_url = launch_server_process(config.server_args)
@@ -82,6 +83,38 @@ class Rollout:
         )
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
+
+    def make_request(self, endpoint, payload=None):
+
+        while True:
+            try:
+                response = requests.post(
+                    f"{self.worker_url}/{endpoint}",
+                    json=payload or {}
+                )
+                response.raise_for_status()
+                return
+            except:
+                time.sleep(1)
+
+    async def async_generate(self, states, sampling_params):
+        
+        payload = {
+            "input_ids": states,
+            "sampling_params": sampling_params,
+            "return_logprob": True
+        }
+
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    async with session.post(
+                        f"{self.router_url}/generate",
+                        json=payload
+                    ) as response:
+                        return await response.json(content_type=None)
+                except:
+                    await asyncio.sleep(1)
         
     async def rollout(self, data, train):
 
@@ -98,8 +131,7 @@ class Rollout:
         scores = []
         for turn in range(1, self.config.max_turns + 1):
 
-            llm_response = await async_generate(
-                self.router_url,
+            llm_response = await self.async_generate(
                 state_dict["states"],
                 self.train_sampling_params
                 if train else self.test_sampling_params
@@ -176,9 +208,7 @@ class Rollout:
             return
 
         if self.device_mesh["tp"].get_local_rank() == 0:
-            make_request(
-                self.worker_url, "release_memory_occupation"
-            )
+            self.make_request("release_memory_occupation")
 
         if dist.get_rank() == 0:
 
@@ -220,11 +250,7 @@ class Rollout:
         dist.barrier()
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
-            make_request(
-                self.worker_url,
-                "resume_memory_occupation",
-                {"tags": ["weights"]}
-            )
+            self.make_request("resume_memory_occupation", {"tags": ["weights"]})
         
         for idx, (name, tensor) in enumerate(state_dict.items()):
             serialized_tensor = MultiprocessingSerializer.serialize(
@@ -255,14 +281,8 @@ class Rollout:
                     "serialized_named_tensors": serialized_named_tensors,
                     "flush_cache": (idx == len(state_dict) - 1)
                 }
-                make_request(
-                    self.worker_url, "update_weights_from_tensor", payload
-                )
+                self.make_request("update_weights_from_tensor", payload)
         dist.barrier()
         state_dict.clear()
         if self.device_mesh["tp"].get_local_rank() == 0:
-            make_request(
-                self.worker_url,
-                "resume_memory_occupation",
-                {"tags": ["kv_cache"]}
-            )
+            self.make_request("resume_memory_occupation", {"tags": ["kv_cache"]})

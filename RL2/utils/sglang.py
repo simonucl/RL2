@@ -2,8 +2,6 @@ from omegaconf import OmegaConf
 import os
 import time
 import socket
-import asyncio
-import aiohttp
 import requests
 import multiprocessing
 import torch.distributed as dist
@@ -24,7 +22,7 @@ def get_available_port():
         s.listen(1)
         return s.getsockname()[1]
 
-def prepare_environment_variables(device_mesh):
+def prepare_environment_variables(process_group):
 
     if "TORCHELASTIC_USE_AGENT_STORE" in os.environ.keys():
         del os.environ["TORCHELASTIC_USE_AGENT_STORE"]
@@ -35,11 +33,11 @@ def prepare_environment_variables(device_mesh):
         cuda_visible_device = cuda_visible_devices[int(os.environ["LOCAL_RANK"])]
     else:
         cuda_visible_device = os.environ["LOCAL_RANK"]
-    cuda_visible_devices = device_mesh.size() * [None]
+    cuda_visible_devices = dist.get_world_size(process_group) * [None]
     dist.all_gather_object(
         cuda_visible_devices,
         cuda_visible_device,
-        device_mesh.get_group(),
+        process_group,
     )
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
 
@@ -84,30 +82,3 @@ def launch_router_process(worker_urls):
     time.sleep(3)
     assert process.is_alive()
     return f"http://{router_args.host}:{router_args.port}"
-
-def make_request(url, endpoint, payload=None):
-
-    response = requests.post(
-        f"{url}/{endpoint}",
-        json=payload or {}
-    )
-    response.raise_for_status()
-
-async def async_generate(url, states, sampling_params):
-
-    payload = {
-        "input_ids": states,
-        "sampling_params": sampling_params,
-        "return_logprob": True
-    }
-
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.post(
-                    f"{url}/generate",
-                    json=payload
-                ) as response:
-                    return await response.json(content_type=None)
-            except:
-                await asyncio.sleep(1)
