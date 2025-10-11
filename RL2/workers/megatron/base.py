@@ -106,3 +106,10 @@ class MegatronWorker(Worker):
             self.config.update_per_rollout if pack_minibatches else 1,
             pair
         )
+
+    def optimizer_step(self):
+        
+        _, grad_norm, _ = self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.scheduler.step()
+        return grad_norm.item()

@@ -66,14 +66,13 @@ class MegatronActor(MegatronWorker):
             micro_batch_size=1,
             forward_only=False # optional
         )
-        # TODO: abstract optimizer_step
-        self.optimizer.step()
-        self.optimizer.zero_grad()
+        grad_norm = self.optimizer.step()
         if mpu.is_pipeline_last_stage():
             metrics = {
                 k: [metric[k] for metric in metrics]
                 for k in metrics[0].keys()
             }
+            metrics["grad_norm"] = [grad_norm]
             gather_and_log(
                 metrics,
                 step,
