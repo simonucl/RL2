@@ -136,7 +136,8 @@ class Actor(Worker):
 
                 # Track TIS metrics if enabled (independent of tis_coef)
                 if getattr(self.config, 'track_tis', False):
-                    tis_raw = torch.exp(logps.detach() - minibatch["llm_logps"])
+                    tis_raw = logps.detach() - minibatch["llm_logps"]
+                    tis_raw_v2 = 0.5 * (tis_raw ** 2)
                     tis_raw_mean = aggregate_values(
                         tis_raw,
                         minibatch["action_mask"],
@@ -144,12 +145,19 @@ class Actor(Worker):
                         total_actions,
                         total_sequences
                     )
+                    tis_raw_v2_mean = aggregate_values(
+                        tis_raw_v2,
+                        minibatch["action_mask"],
+                        self.config.avg_level,
+                        total_actions,
+                        total_sequences
+                    )
                     metric["actor/tis_raw_mean"].append(tis_raw_mean.item())
+                    metric["actor/tis_raw_v2_mean"].append(tis_raw_v2_mean.item())
                     
-                    # If tis_coef > 0, also track the clamped version
                     if self.config.tis_coef > 0 and tis is not None:
                         tis_clamped_mean = aggregate_values(
-                            tis,  # This is the clamped version from above
+                            tis,
                             minibatch["action_mask"],
                             self.config.avg_level,
                             total_actions,
