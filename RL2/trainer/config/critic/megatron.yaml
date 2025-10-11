@@ -1,7 +1,5 @@
 model_name: null
 tf_config:
-  bf16: true
-  attention_backend: flash
   recompute_granularity: full
   recompute_method: uniform
   recompute_num_layers: 1

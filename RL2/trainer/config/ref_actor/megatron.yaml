@@ -1,7 +1,4 @@
 model_name: ${actor.model_name}
-tf_config:
-  bf16: true
-  attention_backend: flash
 pp_size: ${actor.pp_size}
 cp_size: ${actor.cp_size}
 tp_size: ${actor.tp_size}

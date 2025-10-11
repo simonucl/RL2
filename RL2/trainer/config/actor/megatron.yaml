@@ -1,7 +1,5 @@
 model_name: null
 tf_config:
-  bf16: true
-  attention_backend: flash
   recompute_granularity: full
   recompute_method: uniform
   recompute_num_layers: 1
@@ -15,6 +13,6 @@ optimizer:
   lr: 1e-6
   weight_decay: 1e-2
 max_grad_norm: 1.0
-scheduler: constant
+scheduler: cosine
 warmup_ratio: 0.1
 offload_optimizer: true
