@@ -81,11 +81,7 @@ class MegatronActor(MegatronWorker):
                 total_actions,
                 total_sequences
             )
-            return (
-                mpu.get_data_parallel_world_size(with_context_parallel=True) * loss,
-                1,
-                {"loss": loss.item()}
-            )
+            return self.scale_loss(loss), 1, {"loss": loss.item()}
 
         forward_backward_func = get_forward_backward_func()
         metrics = forward_backward_func(
@@ -103,11 +99,7 @@ class MegatronActor(MegatronWorker):
                 for k in metrics[0].keys()
             }
             metrics["grad_norm"] = [grad_norm]
-            gather_and_log(
-                metrics,
-                step,
-                mpu.get_data_parallel_group()
-            )
+            gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
     def dpo_update(self, tensor_dict, step):
@@ -131,11 +123,7 @@ class MegatronActor(MegatronWorker):
                 minibatch["ref_logps"],
                 self.config.beta
             )
-            return (
-                mpu.get_data_parallel_world_size(with_context_parallel=True) * loss.sum() / total_pairs,
-                1,
-                metric
-            )
+            return self.scale_loss(loss.sum() / total_pairs), 1, metric
 
         forward_backward_func = get_forward_backward_func()
         metrics = forward_backward_func(
@@ -153,8 +141,4 @@ class MegatronActor(MegatronWorker):
                 for k in metrics[0].keys()
             }
             metrics["grad_norm"] = [grad_norm]
-            gather_and_log(
-                metrics,
-                step,
-                mpu.get_data_parallel_group()
-            )
+            gather_and_log(metrics, step, mpu.get_data_parallel_group())

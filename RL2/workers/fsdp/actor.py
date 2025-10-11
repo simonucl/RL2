@@ -98,7 +98,7 @@ class FSDPActor(FSDPWorker):
                 total_actions,
                 total_sequences
             )
-            self.backward(loss)
+            self.scale_loss(loss).backward()
             metrics["loss"].append(loss.item())
 
         grad_norm = self.optimizer_step()
@@ -118,7 +118,7 @@ class FSDPActor(FSDPWorker):
         ):
             logps = self.forward(minibatch)
             loss, metric = dpo_loss(logps, minibatch["ref_logps"], self.config.beta)
-            self.backward(loss.sum() / total_pairs)
+            self.scale_loss(loss.sum() / total_pairs).backward()
             for k, v in metric.items():
                 metrics[k].extend(v)
 
@@ -186,7 +186,7 @@ class FSDPActor(FSDPWorker):
                     ).sum() / total_actions
                     loss = loss + self.config.kl.coef * kl_loss
 
-                self.backward(loss)
+                self.scale_loss(loss).backward()
 
                 tbar.update()
                 metric["actor/entropy"].append(entropy.item())

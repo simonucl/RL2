@@ -106,6 +106,9 @@ class MegatronWorker(Worker):
             pair
         )
 
+    def scale_loss(self, loss):
+        return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
+
     def optimizer_step(self):
         
         _, grad_norm, _ = self.optimizer.step()

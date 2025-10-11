@@ -134,9 +134,9 @@ class FSDPWorker(Worker):
                             device, non_blocking=True
                         )
 
-    def backward(self, loss):
+    def scale_loss(self, loss):
         # https://github.com/ChenmienTan/RL2/issues/11
-        (self.dp_size * self.config.cp_size * loss).backward()
+        return self.dp_size * self.config.cp_size * loss
     
     def optimizer_step(self):
 

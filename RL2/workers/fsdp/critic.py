@@ -67,7 +67,7 @@ class FSDPCritic(FSDPWorker):
             chosen_rewards, rejected_rewards = rewards.sum(-1).view(-1, 2).T
             reward_margins = chosen_rewards - rejected_rewards
             loss = - F.logsigmoid(reward_margins).sum() / total_pairs
-            self.backward(loss)
+            self.scale_loss(loss).backward()
             metrics["loss"].append(loss.item())
             metrics["accuray"].extend((reward_margins > 0).tolist())
 
@@ -115,7 +115,7 @@ class FSDPCritic(FSDPWorker):
                     total_sequences
                 )
 
-                self.backward(loss)
+                self.scale_loss(loss).backward()
 
                 tbar.update()
                 metric["critic/loss"].append(loss.item())
