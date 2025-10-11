@@ -1,6 +1,5 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 from RL2.workers.fsdp import FSDPWorker, init_weight_context
 from RL2.utils.sequences import count_total
@@ -8,7 +7,10 @@ from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.algorithms import compute_approx_kl
+from RL2.utils.algorithms import (
+    dpo_loss,
+    compute_approx_kl
+)
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -115,18 +117,10 @@ class FSDPActor(FSDPWorker):
             minibatches, desc="Update actor"
         ):
             logps = self.forward(minibatch)
-            chosen_rewards, rejected_rewards = self.config.beta * (
-                logps - minibatch["ref_logps"]
-            ).sum(-1).view(-1, 2).T
-            reward_margins = chosen_rewards - rejected_rewards
-            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
-            self.backward(loss)
-
-            metrics["rewards/chosen"].extend(chosen_rewards.tolist())
-            metrics["rewards/rejected"].extend(rejected_rewards.tolist())
-            metrics["rewards/margin"].extend(reward_margins.tolist())
-            metrics["loss"].append(loss.item())
-            metrics["accuray"].extend((reward_margins > 0).tolist())
+            loss, metric = dpo_loss(logps, minibatch["ref_logps"], self.config.beta)
+            self.backward(loss.sum() / total_pairs)
+            for k, v in metric.items():
+                metrics[k].extend(v)
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
