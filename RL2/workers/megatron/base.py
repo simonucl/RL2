@@ -73,7 +73,7 @@ class MegatronWorker(Worker):
         lr_warmup_steps = int(self.config.warmup_ratio * num_training_steps)
         lr_decay_steps = num_training_steps - lr_warmup_steps
 
-        return OptimizerParamScheduler(
+        self.scheduler = OptimizerParamScheduler(
             self.optimizer,
             init_lr=0.0,
             max_lr=self.config.optimizer.lr,
