@@ -52,7 +52,7 @@ class MegatronActor(MegatronWorker):
             )
             return (
                 mpu.get_data_parallel_world_size(with_context_parallel=True) * loss,
-                1.0,
+                1,
                 {"loss": loss.item()}
             )
 
