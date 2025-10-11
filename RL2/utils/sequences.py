@@ -110,7 +110,7 @@ def scatter_data(
         minibatches = tensor_dict_to_minibatches(
             tensor_dict, dp_size, max_length_per_dp, pair
         )
-    object_list = [minibatches] if dist.get_rank() == 0 else None
+    object_list = [minibatches] if dist.get_rank() == 0 else [None]
     dist.broadcast_object_list(
         object_list,
         src=0
