@@ -19,14 +19,14 @@ from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
 from RL2.utils.sequences import scatter_data
 
 # TODO: why offloading is incompatible with initialization on meta device?
-def init_weight_context(worker):
+def whether_load_weight(worker):
     if any([
         dist.get_rank() == 0,
         worker.device_mesh["tp"].size() > 1 and worker.device_mesh["tp"].get_local_rank() == 0,
         getattr(worker.config, "offload_model", False)
     ]):
-        return torch.device("cpu")
-    return torch.device("meta")
+        return True
+    return False
 
 
 class FSDPWorker(Worker):

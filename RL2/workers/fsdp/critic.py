@@ -2,7 +2,7 @@ from collections import defaultdict
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForTokenClassification
-from RL2.workers.fsdp import FSDPWorker, init_weight_context
+from RL2.workers.fsdp import FSDPWorker, whether_load_weight
 from RL2.utils.sequences import count_total
 from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
 from RL2.utils.functions import aggregate_values
@@ -20,13 +20,20 @@ class FSDPCritic(FSDPWorker):
     def __init__(self, config):
         super().__init__(config, True)
 
-        with init_weight_context(self):
-            self.model = AutoModelForTokenClassification.from_pretrained(
-                config.model_name,
-                num_labels=1,
-                trust_remote_code=True,
-                attn_implementation="flash_attention_2"
-            )
+        load_weight = whether_load_weight(self)
+        kwargs = {
+            "model_name_or_path": config.model_name,
+            "num_labels": 1,
+            "trust_remote_code": True,
+            "attn_implementation": "flash_attention_2"
+        }
+        if load_weight:
+            self.model = AutoModelForTokenClassification.from_pretrained(**kwargs)
+        else:
+            with torch.device("meta"):
+                self.model = AutoModelForTokenClassification.from_config(
+                    config.model_name,
+                )
 
         self.prepare_model_optimizer()
 
