@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForTokenClassification
 from RL2.workers.fsdp import FSDPWorker, init_weight_context
-from RL2.utils.sequences import data_manager, count_total
+from RL2.utils.sequences import count_total
 from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
 from RL2.utils.functions import aggregate_values
 from RL2.utils.logging import (
@@ -41,18 +41,20 @@ class FSDPCritic(FSDPWorker):
 
     @time_logger("compute_values")
     @torch.no_grad()
-    @data_manager(gather=True)
-    def compute_values(self, minibatches, step):
+    def compute_values(self, tensor_dict, step):
+        minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_device(torch.cuda.current_device())
+
         self.model.eval()
         for minibatch in progress_bar(minibatches, desc="Compute values"):
             minibatch["values"] = self.forward(minibatch)
+
         self.load_model_to_device("cpu")
-        return minibatches
+        return self.gather_data(minibatches)
 
     @time_logger("update_critic")
-    @data_manager(pair=True)
-    def rm_update(self, minibatches, step):
+    def rm_update(self, tensor_dict, step):
+        minibatches = self.scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
             minibatches, "eos_mask", self.device_mesh["dp"]
@@ -74,9 +76,10 @@ class FSDPCritic(FSDPWorker):
         gather_and_log(metrics, step, self.device_mesh["dp"])
 
     @time_logger("update_critic")
-    @data_manager(pack_minibatches=True)
-    def ppo_update(self, batches, step: int):
+    def ppo_update(self, tensor_dict, step: int):
+        batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_device(torch.cuda.current_device())
+
         self.model.train()
         tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),

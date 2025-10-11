@@ -16,6 +16,7 @@ from transformers import (
 from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
+from RL2.utils.sequences import scatter_data
 
 # TODO: why offloading is incompatible with initialization on meta device?
 def init_weight_context(worker):
@@ -84,6 +85,27 @@ class FSDPWorker(Worker):
             self.optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_training_steps
+        )
+
+    def scatter_data(
+        self,
+        tensor_dict,
+        pack_minibatches: bool = False,
+        pair: bool = False
+    ):
+
+        max_length_per_dp = self.device_mesh["cp"].size() * self.device_mesh["tp"].size() * (
+            self.config.max_length_per_device
+            if torch.is_grad_enabled()
+            else self.config.max_length_per_inference
+        )
+        return scatter_data(
+            tensor_dict,
+            self.device_mesh["dp"].get_local_rank(),
+            self.device_mesh["dp"].size(),
+            max_length_per_dp,
+            self.config.update_per_rollout if pack_minibatches else 1,
+            pair
         )
 
     def load_model_to_device(self, device):

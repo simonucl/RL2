@@ -1,18 +1,12 @@
 from typing import List
 import math
-import functools
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
-from RL2.utils.comm import (
-    split_and_scatter_list,
-    boardcast_list,
-    gather_and_concat_list
-)
+from RL2.utils.comm import gather_and_concat_list
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
-def _tensor_dict_to_minibatches(
-    worker, tensor_dict, pair: bool
-):
+def tensor_dict_to_minibatches(tensor_dict, dp_size, max_length_per_dp, pair: bool):
 
     # We pack sequences into minibatches for higher throughput.
     # There are two constrains:
@@ -31,20 +25,12 @@ def _tensor_dict_to_minibatches(
         # When pair, every two adjacent sequences will be colocated, so 
         # their length are summed.
         seq_len_list = torch.tensor(seq_len_list).view(-1, 2).sum(-1).tolist()
-    max_length_per_dp = worker.device_mesh["cp"].size() * worker.device_mesh["tp"].size() * (
-        worker.config.max_length_per_device
-        if torch.is_grad_enabled()
-        else worker.config.max_inference_length_per_device
-    )
     assert max(seq_len_list) <= max_length_per_dp, \
-        f"The longest sequence has a total length of {max(seq_len_list)}," \
+        f"The longest sequence has a length of {max(seq_len_list)}," \
         f"which exceeds the maximum length per dp {max_length_per_dp}."
-    n_minibatches = math.ceil(
-        sum(seq_len_list) / max_length_per_dp
-    )
-    multiple_of = worker.device_mesh["dp"].size()
-    if n_minibatches % multiple_of != 0:
-        n_minibatches += multiple_of - n_minibatches % multiple_of
+    n_minibatches = math.ceil(sum(seq_len_list) / max_length_per_dp)
+    if n_minibatches % dp_size != 0:
+        n_minibatches += dp_size - n_minibatches % dp_size
 
     # Partition sequences into n_minibatches balanced minibatches.
     while True:
@@ -55,16 +41,11 @@ def _tensor_dict_to_minibatches(
             # If not, we pad the number of sequences to `n_minibatches`.
             PAD_SEQUENCES = n_minibatches - len(seq_len_list)
             for k, v in tensor_dict.items():
-                tensor_dict[k] = torch.cat((
+                tensor_dict[k] = F.pad(
                     v,
-                    torch.zeros(
-                        (
-                            (2 if pair else 1) * PAD_SEQUENCES,
-                            v.shape[-1]
-                        ),
-                        dtype=v.dtype
-                    )
-                ))
+                    (0, 0, 0, (2 if pair else 1) * PAD_SEQUENCES),
+                    value=0
+                )
             seq_len_list.extend(PAD_SEQUENCES * [0])
         else:
             PAD_SEQUENCES = 0
@@ -78,7 +59,7 @@ def _tensor_dict_to_minibatches(
         ])
         if max_minibatch_length <= max_length_per_dp:
             break
-        n_minibatches += worker.device_mesh["dp"].size()
+        n_minibatches += dp_size
 
     if pair:
         partitions = [
@@ -95,62 +76,48 @@ def _tensor_dict_to_minibatches(
         for partition in partitions
     ]
 
-def tensor_dict_to_minibatches(
-    worker, tensor_dict, pack_minibatches: bool, pair: bool
+def scatter_data(
+    tensor_dict,
+    dp_rank,
+    dp_size,
+    max_length_per_dp,
+    num_batches : int = 1,
+    pair : bool = False
 ):
 
-    if pack_minibatches:
-        # Pack minibatches into multiple batches, where each batch is 
-        # used for an update.
+    if num_batches > 1:
         if dist.get_rank() == 0:
-            return [
-                tensor_dict_to_minibatches(
-                    worker, {
-                        k: torch.chunk(
-                            v, worker.config.update_per_rollout, dim=0
-                        )[update]
-                        for k, v in tensor_dict.items()
-                    }, False, pair
+            batch_size = math.ceil(len(tensor_dict["states"]) / num_batches)
+            batches = []
+            for num_batch in range(num_batches):
+                batch_tensor_dict = {
+                    k: v[num_batch * batch_size:(num_batch + 1) * batch_size]
+                    for k, v in tensor_dict.items()
+                }
+                batches.append(
+                    scatter_data(
+                        batch_tensor_dict, dp_rank, dp_size, max_length_per_dp, pair=pair
+                    )
                 )
-                for update in range(worker.config.update_per_rollout)
-            ]
+            return batches
         else:
             return [
-                tensor_dict_to_minibatches(worker, None, False, pair)
-                for _ in range(worker.config.update_per_rollout)
+                scatter_data(None, dp_rank, dp_size, max_length_per_dp, pair=pair)
+                for _ in range(num_batches)
             ]
 
-    if worker.device_mesh["pp"].get_local_rank() == 0:
-        if worker.device_mesh["tp"].get_local_rank() == 0:
-            if worker.device_mesh["cp"].get_local_rank() == 0:
-                if worker.device_mesh["dp"].get_local_rank() == 0:
-                    minibatches = _tensor_dict_to_minibatches(
-                        worker, tensor_dict, pair
-                    )
-                minibatches = split_and_scatter_list(
-                    minibatches
-                    if worker.device_mesh["dp"].get_local_rank() == 0
-                    else None,
-                    worker.device_mesh["dp"]
-                )
-            minibatches = boardcast_list(
-                minibatches
-                if worker.device_mesh["cp"].get_local_rank() == 0
-                else None,
-                worker.device_mesh["cp"]
-            )
-        minibatches = boardcast_list(
-            minibatches
-            if worker.device_mesh["tp"].get_local_rank() == 0
-            else None,
-            worker.device_mesh["tp"]
+    if dist.get_rank() == 0:
+        minibatches = tensor_dict_to_minibatches(
+            tensor_dict, dp_size, max_length_per_dp, pair
         )
-    minibatches = boardcast_list(
-        minibatches
-        if worker.device_mesh["pp"].get_local_rank() == 0
-        else None,
-        worker.device_mesh["pp"]
+    object_list = [minibatches] if dist.get_rank() == 0 else None
+    dist.broadcast_object_list(
+        object_list,
+        src=0
     )
+    minibatches = object_list[0]
+    chunk_size = len(minibatches) // dp_size
+    minibatches = minibatches[dp_rank * chunk_size:(dp_rank + 1) * chunk_size]
     return [
         {
             k: v.to(torch.cuda.current_device())
@@ -159,7 +126,7 @@ def tensor_dict_to_minibatches(
         for minibatch in minibatches
     ]
 
-def minibatches_to_tensor_dict(worker, minibatches):
+def gather_data(worker, minibatches):
     
     minibatches = [
         {
@@ -195,22 +162,6 @@ def minibatches_to_tensor_dict(worker, minibatches):
             }
 
         return tensor_dict
-
-def data_manager(pack_minibatches=False, pair=False, gather=False):
-    def decorator(func):
-        @functools.wraps(func)
-        def func_with_data_scatter_and_gather(
-            worker, tensor_dict, *args, **kwargs
-        ):
-            minibatches = tensor_dict_to_minibatches(
-                worker, tensor_dict, pack_minibatches, pair
-            )
-            output = func(worker, minibatches, *args, **kwargs)
-            if gather:
-                output = minibatches_to_tensor_dict(worker, output)
-            return output
-        return func_with_data_scatter_and_gather
-    return decorator
 
 def count_total(minibatches, key, device_mesh):
 

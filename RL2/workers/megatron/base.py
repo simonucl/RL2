@@ -1,5 +1,6 @@
 from functools import partial
 from omegaconf import OmegaConf
+import torch
 from transformers import AutoConfig
 from megatron.core import (
     parallel_state as mpu,
@@ -10,6 +11,7 @@ from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from mbridge import AutoBridge
 from RL2.workers import Worker
 from RL2.utils.megatron.context_parallelism import slide_along_cp
+from RL2.utils.sequences import scatter_data
 
 def forward_step(f, data_iterator, model):
 
@@ -83,4 +85,24 @@ class MegatronWorker(Worker):
             end_wd=self.config.optimizer.weight_decay,
             wd_incr_steps=0,
             wd_incr_style="constant"
+        )
+
+    def scatter_data(
+        self,
+        tensor_dict,
+        pack_minibatches: bool = False,
+        pair: bool = False
+    ):
+        max_length_per_dp = mpu.get_context_parallel_world_size() * mpu.get_tensor_parallel_world_size() * (
+            self.config.max_length_per_device
+            if torch.is_grad_enabled()
+            else self.config.max_length_per_inference
+        )
+        return scatter_data(
+            tensor_dict,
+            mpu.get_data_parallel_rank(),
+            mpu.get_data_parallel_world_size(),
+            max_length_per_dp,
+            self.config.update_per_rollout if pack_minibatches else 1,
+            pair
         )
