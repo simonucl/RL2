@@ -36,13 +36,13 @@ def time_logger(name):
 def gather_and_log(
     metrics,
     step,
-    device_mesh=None,
+    process_group=None,
     metrics_to_sum=["loss"]
 ):
 
-    if device_mesh is not None:
+    if process_group is not None:
         metrics = {
-            k: gather_and_concat_list(v, device_mesh)
+            k: gather_and_concat_list(v, process_group)
             for k, v in metrics.items()
         }
 
@@ -57,9 +57,9 @@ def gather_and_log(
         ]))
         wandb.log(metrics, step=step)
 
-def gather_and_reduce(lst, device_mesh):
+def gather_and_reduce(lst, process_group):
 
-    lst = gather_and_concat_list(lst, device_mesh)
+    lst = gather_and_concat_list(lst, process_group)
     if dist.get_rank() == 0:
         return sum(lst)
 

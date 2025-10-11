@@ -136,7 +136,7 @@ def gather_data(worker, minibatches):
         for minibatch in minibatches
     ]
     minibatches = gather_and_concat_list(
-        minibatches, worker.device_mesh["dp"]
+        minibatches, worker.device_mesh["dp"].get_group()
     )
     if dist.get_rank() == 0:
 

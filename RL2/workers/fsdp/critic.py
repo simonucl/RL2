@@ -80,7 +80,7 @@ class FSDPCritic(FSDPWorker):
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
-        gather_and_log(metrics, step, self.device_mesh["dp"])
+        gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
     @time_logger("update_critic")
     def ppo_update(self, tensor_dict, step: int):
@@ -132,7 +132,7 @@ class FSDPCritic(FSDPWorker):
             
             for k, v in metric.items():
                 metrics[k].append(
-                    gather_and_reduce(v, self.device_mesh["dp"])
+                    gather_and_reduce(v, self.device_mesh["dp"].get_group())
                 )
             metrics["critic/grad_norm"].append(grad_norm)
 
