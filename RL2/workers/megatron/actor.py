@@ -77,5 +77,5 @@ class MegatronActor(MegatronWorker):
             gather_and_log(
                 metrics,
                 step,
-                mpu.get_data_model_parallel_group()
+                mpu.get_data_parallel_group()
             )
