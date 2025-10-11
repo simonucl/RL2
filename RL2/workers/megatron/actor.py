@@ -1,7 +1,7 @@
 from functools import partial
 import torch
 from megatron.core import parallel_state as mpu
-from megatron.core.pipeline_parallel import get_forward_backward_func
+
 from RL2.workers.megatron import MegatronWorker, forward_step
 from RL2.utils.sequences import count_total
 from RL2.utils.megatron.context_parallelism import gather_along_cp
@@ -41,16 +41,7 @@ class MegatronActor(MegatronWorker):
             minibatch = gather_along_cp(minibatch, packed_seq_lens)
             return minibatch
         
-        forward_backward_func = get_forward_backward_func()
-        minibatches = forward_backward_func(
-            model=self.model,
-            data_iterator=iter(minibatches),
-            num_microbatches=len(minibatches),
-            forward_step_func=partial(forward_step, f),
-            seq_length=1,
-            micro_batch_size=1,
-            forward_only=True
-        )
+        minibatches = self.forward_backward(f, minibatches, step, False)
 
         self.load_model_to_device("cpu")
         return self.gather_data(minibatches)
@@ -83,23 +74,7 @@ class MegatronActor(MegatronWorker):
             )
             return self.scale_loss(loss), 1, {"loss": loss.item()}
 
-        forward_backward_func = get_forward_backward_func()
-        metrics = forward_backward_func(
-            model=self.model,
-            data_iterator=iter(minibatches),
-            num_microbatches=len(minibatches),
-            forward_step_func=partial(forward_step, f),
-            seq_length=1,
-            micro_batch_size=1
-        )
-        grad_norm = self.optimizer_step()
-        if mpu.is_pipeline_last_stage():
-            metrics = {
-                k: [metric[k] for metric in metrics]
-                for k in metrics[0].keys()
-            }
-            metrics["grad_norm"] = [grad_norm]
-            gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        self.forward_backward(f, minibatches, step)
 
     @time_logger("update_actor")
     def dpo_update(self, tensor_dict, step):
@@ -125,20 +100,25 @@ class MegatronActor(MegatronWorker):
             )
             return self.scale_loss(loss.sum() / total_pairs), 1, metric
 
-        forward_backward_func = get_forward_backward_func()
-        metrics = forward_backward_func(
-            model=self.model,
-            data_iterator=iter(minibatches),
-            num_microbatches=len(minibatches),
-            forward_step_func=partial(forward_step, f),
-            seq_length=1,
-            micro_batch_size=1
-        )
-        grad_norm = self.optimizer_step()
-        if mpu.is_pipeline_last_stage():
-            metrics = {
-                k: [metric[k] for metric in metrics]
-                for k in metrics[0].keys()
-            }
-            metrics["grad_norm"] = [grad_norm]
-            gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        self.forward_backward(f, minibatches, step)
+
+    @time_logger("update_actor")
+    def ppo_update(self, tensor_dict, step):
+        if step < self.config.freeze_steps:
+            return
+        batches = self.scatter_data(tensor_dict, pack_minibatches=True)
+        self.load_model_to_device(torch.cuda.current_device())
+
+        def f(minibatch, packed_seq_lens, logits):
+            pass
+
+        self.model.train()
+        for batch in batches:
+
+            total_actions, total_sequences = count_total(
+                batch,
+                ("action_mask", "eos_mask"),
+                mpu.get_data_parallel_group()
+            )
+            
+            self.forward_backward(f, batch, step)

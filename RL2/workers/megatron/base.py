@@ -8,24 +8,12 @@ from megatron.core import (
 )
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
+from megatron.core.pipeline_parallel import get_forward_backward_func
 from mbridge import AutoBridge
 from RL2.workers import Worker
 from RL2.utils.megatron.context_parallelism import slide_along_cp
 from RL2.utils.sequences import scatter_data
-
-def forward_step(f, data_iterator, model):
-
-    minibatch = next(data_iterator)
-    minibatch, packed_seq_params = slide_along_cp(minibatch)
-    output_tensor = model(
-        input_ids=minibatch["states"],
-        attention_mask=None,
-        position_ids=None,
-        labels=None,
-        packed_seq_params=packed_seq_params
-    )
-
-    return output_tensor, partial(f, minibatch, packed_seq_params)
+from RL2.utils.logging import gather_and_log
 
 
 class MegatronWorker(Worker):
@@ -35,8 +23,15 @@ class MegatronWorker(Worker):
         
         config = AutoConfig.from_pretrained(config.model_name)
         self.bridge = AutoBridge.from_config(config)
-        tf_config = OmegaConf.to_container(self.config.tf_config)
-        self.bridge.set_extra_args(**tf_config)
+        tf_config = (
+            OmegaConf.to_container(self.config.tf_config)
+            if hasattr(self.config, "tf_config") else {}
+        )
+        self.bridge.set_extra_args(
+            bf16=True,
+            attention_backend="flash",
+            **tf_config
+        )
 
     def prepare_device_mesh(self):
 
@@ -109,9 +104,42 @@ class MegatronWorker(Worker):
     def scale_loss(self, loss):
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
-    def optimizer_step(self):
-        
-        _, grad_norm, _ = self.optimizer.step()
-        self.optimizer.zero_grad()
-        self.scheduler.step(1)
-        return grad_norm
+    def forward_backward(self, f, minibatches, step, train=True):
+
+        def forward_step(f, data_iterator, model):
+
+            minibatch = next(data_iterator)
+            minibatch, packed_seq_params = slide_along_cp(minibatch)
+            output_tensor = model(
+                input_ids=minibatch["states"],
+                attention_mask=None,
+                position_ids=None,
+                labels=None,
+                packed_seq_params=packed_seq_params
+            )
+
+            return output_tensor, partial(f, minibatch, packed_seq_params)
+
+        forward_backward = get_forward_backward_func()
+        output = forward_backward(
+            model=self.model,
+            data_iterator=iter(minibatches),
+            num_microbatches=len(minibatches),
+            forward_step_func=partial(forward_step, f),
+            seq_length=1,
+            micro_batch_size=1,
+            forward_only=not train
+        )
+        if train:
+            _, grad_norm, _ = self.optimizer.step()
+            self.optimizer.zero_grad()
+            self.scheduler.step(1)
+            if mpu.is_pipeline_last_stage():
+                metrics = {
+                    k: [metric[k] for metric in metrics]
+                    for k in metrics[0].keys()
+                }
+                metrics["grad_norm"] = [grad_norm]
+                gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        else:
+            return output
