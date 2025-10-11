@@ -72,7 +72,7 @@ class MegatronActor(MegatronWorker):
         if mpu.is_pipeline_last_stage():
             metrics = {
                 k: [metric[k] for metric in metrics]
-                for k in metrics.keys()
+                for k in metrics[0].keys()
             }
             gather_and_log(
                 metrics,
