@@ -3,7 +3,7 @@ import torch
 from megatron.core import parallel_state as mpu
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from RL2.workers.megatron import MegatronWorker, forward_step
-from RL2.utils.sequences import data_manager, count_total
+from RL2.utils.sequences import count_total
 from RL2.utils.megatron.context_parallelism import gather_along_cp
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
@@ -21,13 +21,12 @@ class MegatronActor(MegatronWorker):
 
     @time_logger("compute_logps")
     @torch.no_grad()
-    @data_manager(gather=True)
-    def compute_logps(self, minibatches, step):
+    def compute_logps(self, tensor_dict, step):
         pass
 
     @time_logger("update_actor")
-    @data_manager() # TODO: boardcast along pp
-    def sft_update(self, minibatches, step):
+    def sft_update(self, tensor_dict, step):
+        minibatches = self.scatter_data(tensor_dict)
 
         total_actions, total_sequences = count_total(
             minibatches,
