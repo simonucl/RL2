@@ -20,7 +20,7 @@ def slide_tensor_along_cp(tensor):
 def slide_along_cp(minibatch):
 
     seq_lens = minibatch["eos_mask"].argmax(-1) + 1
-    multiple_of = mpu.get_tensor_parallel_world_size()
+    multiple_of = mpu.get_tensor_model_parallel_world_size()
     processed_minibatch = {}
     for k, v in minibatch.items():
         tensors = [

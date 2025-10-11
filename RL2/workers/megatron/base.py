@@ -93,7 +93,7 @@ class MegatronWorker(Worker):
         pack_minibatches: bool = False,
         pair: bool = False
     ):
-        max_length_per_dp = mpu.get_context_parallel_world_size() * mpu.get_tensor_parallel_world_size() * (
+        max_length_per_dp = mpu.get_context_parallel_world_size() * mpu.get_tensor_model_parallel_world_size() * (
             self.config.max_length_per_device
             if torch.is_grad_enabled()
             else self.config.max_length_per_inference
