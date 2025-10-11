@@ -55,7 +55,7 @@ class FSDPActor(FSDPWorker):
         return compute_logps_and_entropy(
             logits,
             minibatch,
-            self.device_mesh["tp"],
+            self.device_mesh["tp"].get_group(),
             return_entropy
         )
 
@@ -82,7 +82,7 @@ class FSDPActor(FSDPWorker):
         total_actions, total_sequences = count_total(
             minibatches,
             ("action_mask", "eos_mask"),
-            self.device_mesh["dp"]
+            self.device_mesh["dp"].get_group()
         )
         metrics = defaultdict(list)
         for minibatch in progress_bar(
@@ -108,7 +108,7 @@ class FSDPActor(FSDPWorker):
         minibatches = self.scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
-            minibatches, "eos_mask", self.device_mesh["dp"]
+            minibatches, "eos_mask", self.device_mesh["dp"].get_group()
         ) // 2
         metrics = defaultdict(list)
         for minibatch in progress_bar(
@@ -150,7 +150,7 @@ class FSDPActor(FSDPWorker):
             total_actions, total_sequences = count_total(
                 batch,
                 ("action_mask", "eos_mask"),
-                self.device_mesh["dp"]
+                self.device_mesh["dp"].get_group()
             )
             metric = defaultdict(list)
             for minibatch in batch:

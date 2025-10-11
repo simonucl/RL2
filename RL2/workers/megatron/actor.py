@@ -32,7 +32,7 @@ class MegatronActor(MegatronWorker):
         total_actions, total_sequences = count_total(
             minibatches,
             ("action_mask", "eos_mask"),
-            self.device_mesh["dp"]
+            mpu.get_data_parallel_group()
         )
 
         def loss_func(minibatch, packed_seq_lens, logits):

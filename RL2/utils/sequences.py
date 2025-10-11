@@ -163,11 +163,11 @@ def gather_data(worker, minibatches):
 
         return tensor_dict
 
-def count_total(minibatches, key, device_mesh):
+def count_total(minibatches, key, process_group):
 
     if isinstance(key, tuple):
         return tuple(
-            count_total(minibatches, k, device_mesh)
+            count_total(minibatches, k, process_group)
             for k in key
         )
         
@@ -180,6 +180,6 @@ def count_total(minibatches, key, device_mesh):
     dist.all_reduce(
         total,
         op=dist.ReduceOp.SUM,
-        group=device_mesh.get_group()
+        group=process_group
     )
     return total.to("cpu").item()

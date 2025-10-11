@@ -1,17 +1,17 @@
 import torch
 import torch.distributed as dist
 
-def differentiable_all_reduce(tensor, device_mesh):
+def differentiable_all_reduce(tensor, process_group):
 
     detached_tensor = tensor.detach()
     dist.all_reduce(
         detached_tensor,
         op=dist.ReduceOp.SUM,
-        group=device_mesh.get_group()
+        group=process_group
     )
     return tensor + detached_tensor - tensor.detach()
 
-def compute_logsumexp(logits, device_mesh, chunk_size=1024):
+def compute_logsumexp(logits, process_group, chunk_size=1024):
 
     # When using tensor parallelism, each device only has a shard of logits.
     # We firstly compute logsumexp of the sharded logits on each device,
@@ -30,25 +30,25 @@ def compute_logsumexp(logits, device_mesh, chunk_size=1024):
 
     logsumexps = [
         torch.zeros_like(logsumexp)
-        for _ in range(device_mesh.size())
+        for _ in range(dist.get_world_size(process_group))
     ]
     dist.all_gather(
         logsumexps,
         logsumexp,
-        group=device_mesh.get_group()
+        group=process_group
     )
-    logsumexps[device_mesh.get_local_rank()] = logsumexp # necessary to retain grad
+    logsumexps[dist.get_rank(process_group)] = logsumexp # necessary to retain grad
     logsumexps = torch.cat([
         logsumexp.unsqueeze(-1) for logsumexp in logsumexps
     ], -1)
     return torch.logsumexp(logsumexps, -1)
 
-def gather_action_logits(logits, actions, device_mesh):
+def gather_action_logits(logits, actions, process_group):
 
     # When using tensor parallelism, each device only has a shard of logits.
     # On each device, we gather logits for actions on the device, and then 
     # perform AllReduce to collect the complete logits.
-    rank = device_mesh.get_local_rank()
+    rank = dist.get_rank(process_group)
     start_idx = rank * logits.shape[-1]
     end_idx = (rank + 1) * logits.shape[-1]
 
@@ -67,30 +67,30 @@ def gather_action_logits(logits, actions, device_mesh):
         0.0
     )
 
-    return differentiable_all_reduce(action_logits, device_mesh)
+    return differentiable_all_reduce(action_logits, process_group)
 
-def compute_entropy(logits, logsumexp, device_mesh):
+def compute_entropy(logits, logsumexp, process_group):
 
     probs = torch.exp(logits - logsumexp.unsqueeze(-1))
     return logsumexp - differentiable_all_reduce(
-        (probs * logits).sum(-1), device_mesh
+        (probs * logits).sum(-1), process_group
     )
 
 def compute_logps_and_entropy(
-    logits, minibatch, device_mesh, return_entropy=False
+    logits, minibatch, process_group, return_entropy=False
 ):
             
-    logsumexp = compute_logsumexp(logits, device_mesh)
+    logsumexp = compute_logsumexp(logits, process_group)
     action_logits = gather_action_logits(
         logits,
         minibatch["actions"],
-        device_mesh
+        process_group
     )
     logps = (action_logits - logsumexp) * minibatch["action_mask"]
 
     if return_entropy:
         entropy = compute_entropy(
-            logits, logsumexp, device_mesh
+            logits, logsumexp, process_group
         ) * minibatch["action_mask"]
         return logps, entropy
     else:
