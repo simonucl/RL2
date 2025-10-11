@@ -110,5 +110,5 @@ class MegatronWorker(Worker):
         
         _, grad_norm, _ = self.optimizer.step()
         self.optimizer.zero_grad()
-        self.scheduler.step()
-        return grad_norm.item()
+        self.scheduler.step(1)
+        return grad_norm
