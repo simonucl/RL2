@@ -1,7 +1,7 @@
 from collections import defaultdict
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 from RL2.workers.fsdp import FSDPWorker, whether_load_weight
 from RL2.utils.sequences import count_total
 from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
@@ -33,15 +33,15 @@ class FSDPActor(FSDPWorker):
 
         load_weight = whether_load_weight(self)
         kwargs = {
-            "model_name_or_path": config.model_name,
             "trust_remote_code": True,
             "attn_implementation": "flash_attention_2"
         }
         if load_weight:
-            self.model = model_cls.from_pretrained(**kwargs)
+            self.model = model_cls.from_pretrained(config.model_name, **kwargs)
         else:
+            config = AutoConfig.from_pretrained(config.model_name)
             with torch.device("meta"):
-                self.model = model_cls.from_config(**kwargs)
+                self.model = model_cls.from_config(config, **kwargs)
 
         self.prepare_model_optimizer()
 
