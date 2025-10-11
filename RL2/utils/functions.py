@@ -49,12 +49,12 @@ def gather_action_logits(logits, actions, process_group):
     # On each device, we gather logits for actions on the device, and then 
     # perform AllReduce to collect the complete logits.
     rank = dist.get_rank(process_group)
-    start_idx = rank * logits.shape[-1]
-    end_idx = (rank + 1) * logits.shape[-1]
+    start = rank * logits.shape[-1]
+    end = (rank + 1) * logits.shape[-1]
 
-    local_mask = (actions >= start_idx) & (actions < end_idx)
+    local_mask = (actions >= start) & (actions < end)
     local_actions = torch.where(
-        local_mask, actions - start_idx, 0
+        local_mask, actions - start, 0
     )
 
     action_logits = torch.where(
