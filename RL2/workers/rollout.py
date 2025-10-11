@@ -35,13 +35,18 @@ class Rollout(Worker):
             self.prepare_environment()
 
             os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
+            if 'context_length' in config:
+                context_length = config.context_length
+            else:
+                context_length = None
             self.llm = Engine(
                 model_path=config.model_name,
                 dtype=config.dtype,
                 tp_size=self.device_mesh["tp"].size(),
                 mem_fraction_static=config.gpu_memory_utilization,
                 enable_memory_saver=True,
-                port=config.base_port + dist.get_rank()
+                port=config.base_port + dist.get_rank(),
+                context_length=context_length
             )
 
             self.train_sampling_params = OmegaConf.to_container(
