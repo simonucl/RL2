@@ -4,7 +4,7 @@ import functools
 import torch.distributed as dist
 from tqdm import tqdm
 import wandb
-from RL2.utils.comm import gather_and_concat_list
+from RL2.utils.commication import gather_and_concat_list
 
 def progress_bar(*args, **kwargs):
     return tqdm(

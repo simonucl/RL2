@@ -10,7 +10,7 @@ from RL2.workers import (
     initialize_critic,
     initialize_rollout
 )
-from RL2.utils.comm import initialize_global_process_group
+from RL2.utils.commication import initialize_global_process_group
 from RL2.utils.algorithms import (
     compute_approx_kl, compute_advantages
 )

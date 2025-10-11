@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
-from RL2.utils.comm import gather_and_concat_list
+from RL2.utils.commication import gather_and_concat_list
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
 def tensor_dict_to_minibatches(tensor_dict, dp_size, max_length_per_dp, pair: bool):
@@ -127,6 +127,7 @@ def scatter_data(
         for minibatch in minibatches
     ]
 
+# TODO: write this
 def gather_data(worker, minibatches):
     
     minibatches = [
