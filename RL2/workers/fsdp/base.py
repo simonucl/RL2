@@ -16,7 +16,7 @@ from transformers import (
 from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
-from RL2.utils.sequences import scatter_data
+from RL2.utils.sequences import scatter_data, gather_data
 
 # TODO: why offloading is incompatible with initialization on meta device?
 def init_weight_context(worker):
@@ -106,6 +106,9 @@ class FSDPWorker(Worker):
             self.config.update_per_rollout if pack_minibatches else 1,
             pair
         )
+
+    def gather_data(self, minibatches):
+        return gather_data(minibatches, self.device_mesh["dp"].get_group())
 
     def load_model_to_device(self, device):
     
