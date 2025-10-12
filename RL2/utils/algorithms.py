@@ -3,33 +3,6 @@ import torch.nn.functional as F
 from RL2.datasets import pack_tensor_dicts
 from RL2.utils.logging import time_logger
 
-def dpo_loss(logps, ref_logps, beta):
-
-    chosen_rewards, rejected_rewards = beta * (
-        logps - ref_logps
-    ).sum(-1).view(-1, 2).T
-    reward_margins = chosen_rewards - rejected_rewards
-    loss = - F.logsigmoid(reward_margins)
-    
-    metrics = {
-        "rewards/chosen": chosen_rewards.tolist(),
-        "rewards/rejected": rejected_rewards.tolist(),
-        "rewards/margin": reward_margins.tolist(),
-        "loss": [loss.item()],
-        "accuracy": ((reward_margins > 0).tolist())
-    }
-    return loss, metrics
-
-def ppo_loss(logps, old_logps, advantages, clip):
-
-    ratio = torch.exp(logps - old_logps)
-    clipped_ratio = torch.clamp(ratio, 1 - clip, 1 + clip)
-    objective = advantages * ratio
-    clipped_objective = advantages * clipped_ratio
-    losses = - torch.min(objective, clipped_objective)
-    clip_ratios = objective > clipped_objective
-    return losses, clip_ratios
-# TODO: support more loss func
 def compute_approx_kl(
     logps: torch.Tensor,
     ref_logps: torch.Tensor,

@@ -3,8 +3,8 @@ import torch
 import torch.nn.functional as F
 from transformers import  AutoModelForTokenClassification
 from RL2.workers.fsdp import FSDPWorker, init_weight_context
-from RL2.utils.sequences import count_total
-from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
+from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
+from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import aggregate_values
 from RL2.utils.logging import (
     progress_bar,
@@ -30,14 +30,28 @@ class FSDPCritic(FSDPWorker):
 
         self.prepare_model_optimizer()
 
-    @context_parallelism_manager
-    def forward(self, minibatch) -> torch.Tensor:
+    def forward(self, minibatch, prefix=None):
 
-        return self.model(
+        minibatch, cu_seqlens = slide_along_cp(
+            minibatch,
+            self.device_mesh["cp"].get_group(),
+            self.device_mesh["tp"].size()
+        )
+        update_ring_attn_params(
+            self.device_mesh["cp"].get_group(),
+            cu_seqlens
+        )
+        key = f"{prefix}_values" if prefix else "values"
+        minibatch[key] = self.model(
             input_ids=minibatch["states"],
             position_ids=minibatch["position_ids"],
             use_cache=False
         ).logits.squeeze(-1) * minibatch["action_mask"]
+        return gather_along_cp(
+            minibatch,
+            self.device_mesh["cp"].get_group(),
+            cu_seqlens
+        )
 
     @time_logger("compute_values")
     @torch.no_grad()
@@ -46,11 +60,13 @@ class FSDPCritic(FSDPWorker):
         self.load_model_to_device(torch.cuda.current_device())
 
         self.model.eval()
+        processed_minibatches = []
         for minibatch in progress_bar(minibatches, desc="Compute values"):
-            minibatch["values"] = self.forward(minibatch)
+            processed_minibatch = self.forward(minibatch, "old")
+            processed_minibatches.append(processed_minibatch)
 
         self.load_model_to_device("cpu")
-        return self.gather_data(minibatches)
+        return self.gather_data(processed_minibatches)
 
     @time_logger("update_critic")
     def rm_update(self, tensor_dict, step):
@@ -63,8 +79,8 @@ class FSDPCritic(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update critic"
         ):
-            rewards = self.forward(minibatch)
-            chosen_rewards, rejected_rewards = rewards.sum(-1).view(-1, 2).T
+            minibatch = self.forward(minibatch)
+            chosen_rewards, rejected_rewards = minibatch["values"].sum(-1).view(-1, 2).T
             reward_margins = chosen_rewards - rejected_rewards
             loss = - F.logsigmoid(reward_margins).sum() / total_pairs
             self.scale_loss(loss).backward()
@@ -96,13 +112,13 @@ class FSDPCritic(FSDPWorker):
             metric = defaultdict(list)
             for minibatch in batch:
 
-                values = self.forward(minibatch)
+                minibatch = self.forward(minibatch)
                 clipped_values = torch.clamp(
-                    values,
-                    minibatch["values"] - self.config.clip,
-                    minibatch["values"] + self.config.clip
+                    minibatch["values"],
+                    minibatch["old_values"] - self.config.clip,
+                    minibatch["old_values"] + self.config.clip
                 )
-                mse = (values - minibatch["returns"]).pow(2)
+                mse = (minibatch["values"] - minibatch["returns"]).pow(2)
                 clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
                 losses = torch.max(mse, clipped_mse)
                 clip_ratios = mse < clipped_mse

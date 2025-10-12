@@ -1,6 +1,6 @@
 from collections import defaultdict
-from turtle import update
 import torch
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 from RL2.workers.fsdp import FSDPWorker, init_weight_context
 from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
@@ -8,11 +8,7 @@ from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.algorithms import (
-    dpo_loss,
-    ppo_loss,
-    compute_approx_kl
-)
+from RL2.utils.algorithms import compute_approx_kl
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -135,12 +131,17 @@ class FSDPActor(FSDPWorker):
             minibatches, desc="Update actor"
         ):
             minibatch = self.forward(minibatch)
-            loss, metric = dpo_loss(
-                minibatch["logps"], minibatch["ref_logps"], self.config.beta
-            )
-            self.scale_loss(loss.sum() / total_pairs).backward()
-            for k, v in metric.items():
-                metrics[k].extend(v)
+            chosen_rewards, rejected_rewards = self.config.beta * (
+                minibatch["logps"] - minibatch["ref_logps"]
+            ).sum(-1).view(-1, 2).T
+            reward_margins = chosen_rewards - rejected_rewards
+            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            self.scale_loss(loss).backward()
+            metrics["rewards/chosen"].extend(chosen_rewards.tolist())
+            metrics["rewards/rejected"].extend(rejected_rewards.tolist())
+            metrics["rewards/margin"].extend(reward_margins.tolist())
+            metrics["loss"].append(loss.item())
+            metrics["accuracy"].extend((reward_margins > 0).tolist())
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
@@ -172,12 +173,16 @@ class FSDPActor(FSDPWorker):
                 minibatch = self.forward(
                     minibatch, return_entropy=True
                 )
-                losses, clip_ratios = ppo_loss(
-                    minibatch["logps"],
-                    minibatch.get("old_logps", minibatch["logps"].detach()),
-                    minibatch["advantages"],
-                    self.config.clip
+                ratio = torch.exp(
+                    minibatch["logps"] - minibatch.get("old_logps", minibatch["logps"].detach())
                 )
+                clipped_ratio = torch.clamp(
+                    ratio, 1 - self.config.clip, 1 + self.config.clip
+                )
+                objective = minibatch["advantages"] * ratio
+                clipped_objective = minibatch["advantages"] * clipped_ratio
+                losses = - torch.min(objective, clipped_objective)
+                clip_ratios = objective > clipped_objective
 
                 if self.config.tis_coef > 0:
                     # https://fengyao.notion.site/off-policy-rl
