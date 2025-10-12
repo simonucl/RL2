@@ -9,4 +9,5 @@ liger_kernel
 sglang[all]==0.5.2
 wandb
 torchdata
+flash-attn==2.8.3
 sglang_router
