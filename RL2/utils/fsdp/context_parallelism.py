@@ -6,7 +6,7 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.modeling_flash_attention_utils import (
     is_flash_attn_greater_or_equal_2_10
 )
-from ring_flash_attn.llama3_flash_attn_varlen import (
+from ring_flash_attn.zigzag_ring_flash_attn_varlen import (
     zigzag_ring_flash_attn_varlen_func
 )
 from ring_flash_attn.adapters.hf_adapter import flash_attention_forward
