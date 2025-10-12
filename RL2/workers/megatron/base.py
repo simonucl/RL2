@@ -91,7 +91,7 @@ class MegatronWorker(Worker):
         max_length_per_dp = mpu.get_context_parallel_world_size() * mpu.get_tensor_model_parallel_world_size() * (
             self.config.max_length_per_device
             if torch.is_grad_enabled()
-            else self.config.max_length_per_inference
+            else self.config.max_inference_length_per_device
         )
         return scatter_data(
             tensor_dict,
@@ -104,9 +104,9 @@ class MegatronWorker(Worker):
     def scale_loss(self, loss):
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
-    def forward_backward(self, f, minibatches, step, train=True):
+    def forward_backward(self, f, minibatches, step):
 
-        def forward_step(f, data_iterator, model):
+        def forward_step(data_iterator, model):
 
             minibatch = next(data_iterator)
             minibatch, cu_seqlens = slide_along_cp(
@@ -115,7 +115,7 @@ class MegatronWorker(Worker):
                 mpu.get_tensor_model_parallel_world_size()
             )
             global_cu_seqlens = mpu.get_context_parallel_world_size() * cu_seqlens
-            max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            max_seqlen = (global_cu_seqlens[1:] - global_cu_seqlens[:-1]).max().item()
             packed_seq_params = PackedSeqParams(
                 cu_seqlens_q=global_cu_seqlens,
                 cu_seqlens_kv=global_cu_seqlens,
@@ -134,16 +134,16 @@ class MegatronWorker(Worker):
             return output_tensor, partial(f, minibatch, cu_seqlens)
 
         forward_backward = get_forward_backward_func()
-        output = forward_backward(
+        metrics = forward_backward(
             model=self.model,
             data_iterator=iter(minibatches),
             num_microbatches=len(minibatches),
-            forward_step_func=partial(forward_step, f),
+            forward_step_func=forward_step,
             seq_length=1,
             micro_batch_size=1,
-            forward_only=not train
+            forward_only=not torch.is_grad_enabled()
         )
-        if train:
+        if torch.is_grad_enabled():
             _, grad_norm, _ = self.optimizer.step()
             self.optimizer.zero_grad()
             self.scheduler.step(1)
@@ -155,4 +155,4 @@ class MegatronWorker(Worker):
                 metrics["grad_norm"] = [grad_norm]
                 gather_and_log(metrics, step, mpu.get_data_parallel_group())
         else:
-            return output
+            return metrics
