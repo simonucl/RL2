@@ -97,7 +97,7 @@ class FSDPWorker(Worker):
         max_length_per_dp = self.device_mesh["cp"].size() * self.device_mesh["tp"].size() * (
             self.config.max_length_per_device
             if torch.is_grad_enabled()
-            else self.config.max_length_per_inference
+            else self.config.max_inference_length_per_device
         )
         return scatter_data(
             tensor_dict,
