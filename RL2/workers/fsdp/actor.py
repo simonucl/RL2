@@ -1,9 +1,10 @@
 from collections import defaultdict
+from turtle import update
 import torch
 from transformers import AutoModelForCausalLM
 from RL2.workers.fsdp import FSDPWorker, init_weight_context
-from RL2.utils.sequences import count_total
-from RL2.utils.fsdp.context_parallelism import context_parallelism_manager
+from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
+from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
@@ -43,9 +44,17 @@ class FSDPActor(FSDPWorker):
 
         self.prepare_model_optimizer()
 
-    @context_parallelism_manager
-    def forward(self, minibatch, return_entropy=False):
+    def forward(self, minibatch, prefix=None, return_entropy=False):
 
+        minibatch, cu_seqlens = slide_along_cp(
+            minibatch,
+            self.device_mesh["cp"].get_group(),
+            self.device_mesh["tp"].size()
+        )
+        update_ring_attn_params(
+            self.device_mesh["cp"].get_group(),
+            cu_seqlens
+        )
         logits = self.model(
             input_ids=minibatch["states"],
             position_ids=minibatch["position_ids"],
@@ -55,11 +64,17 @@ class FSDPActor(FSDPWorker):
         )
         # bfloat16 is unstable for the subsequent `logsumexp` operation.
         # See https://github.com/OpenRLHF/OpenRLHF/pull/634.
-        return compute_logps_and_entropy(
+        compute_logps_and_entropy(
             logits,
             minibatch,
             self.device_mesh["tp"].get_group(),
+            prefix,
             return_entropy
+        )
+        return gather_along_cp(
+            minibatch,
+            self.device_mesh["cp"].get_group(),
+            cu_seqlens
         )
 
     @time_logger("compute_logps")
@@ -70,13 +85,15 @@ class FSDPActor(FSDPWorker):
 
         prefix = "old" if self.train else "ref"
         self.model.eval()
+        processed_minibatches = []
         for minibatch in progress_bar(
             minibatches, desc=f"Compute {prefix} logps"
         ):
-            minibatch[f"{prefix}_logps"] = self.forward(minibatch)
+            processed_minibatch = self.forward(minibatch, prefix)
+            processed_minibatches.append(processed_minibatch)
 
         self.load_model_to_device("cpu")
-        return self.gather_data(minibatches)
+        return self.gather_data(processed_minibatches)
 
     @time_logger("update_actor")
     def sft_update(self, tensor_dict, step):
@@ -91,9 +108,9 @@ class FSDPActor(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update actor"
         ):
-            logps = self.forward(minibatch)
+            minibatch = self.forward(minibatch)
             loss = aggregate_values(
-                - logps,
+                - minibatch["logps"],
                 minibatch["action_mask"],
                 self.config.avg_level,
                 total_actions,
@@ -117,9 +134,9 @@ class FSDPActor(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update actor"
         ):
-            logps = self.forward(minibatch)
+            minibatch = self.forward(minibatch)
             loss, metric = dpo_loss(
-                logps, minibatch["ref_logps"], self.config.beta
+                minibatch["logps"], minibatch["ref_logps"], self.config.beta
             )
             self.scale_loss(loss.sum() / total_pairs).backward()
             for k, v in metric.items():
@@ -152,12 +169,12 @@ class FSDPActor(FSDPWorker):
             metric = defaultdict(list)
             for minibatch in batch:
 
-                logps, entropy = self.forward(
+                minibatch = self.forward(
                     minibatch, return_entropy=True
                 )
                 losses, clip_ratios = ppo_loss(
-                    logps,
-                    minibatch.get("old_logps", logps.detach()),
+                    minibatch["logps"],
+                    minibatch.get("old_logps", minibatch["logps"].detach()),
                     minibatch["advantages"],
                     self.config.clip
                 )
@@ -165,7 +182,7 @@ class FSDPActor(FSDPWorker):
                 if self.config.tis_coef > 0:
                     # https://fengyao.notion.site/off-policy-rl
                     tis = torch.exp(
-                        logps.detach() - minibatch["llm_logps"]
+                        minibatch["logps"].detach() - minibatch["llm_logps"]
                     ).clamp(max=self.config.tis_coef)
                     losses *= tis
                     
@@ -179,7 +196,7 @@ class FSDPActor(FSDPWorker):
                 loss = loss - self.config.entropy.coef * entropy
                 if self.config.kl.coef > 0 and self.config.kl.type == "loss":
                     kl_loss = compute_approx_kl(
-                        logps,
+                        minibatch["logps"],
                         minibatch["ref_logps"],
                         self.config.kl.loss_estimator
                     ).sum() / total_actions

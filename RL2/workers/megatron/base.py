@@ -9,10 +9,10 @@ from megatron.core import (
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
+from megatron.core.packed_seq_params import PackedSeqParams
 from mbridge import AutoBridge
 from RL2.workers import Worker
-from RL2.utils.megatron.context_parallelism import slide_along_cp
-from RL2.utils.sequences import scatter_data
+from RL2.utils.sequences import scatter_data, slide_along_cp
 from RL2.utils.logging import gather_and_log
 
 
@@ -109,7 +109,20 @@ class MegatronWorker(Worker):
         def forward_step(f, data_iterator, model):
 
             minibatch = next(data_iterator)
-            minibatch, packed_seq_params = slide_along_cp(minibatch)
+            minibatch, cu_seqlens = slide_along_cp(
+                minibatch,
+                mpu.get_context_parallel_group(),
+                mpu.get_tensor_model_parallel_world_size()
+            )
+            global_cu_seqlens = mpu.get_context_parallel_world_size() * cu_seqlens
+            max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            packed_seq_params = PackedSeqParams(
+                cu_seqlens_q=global_cu_seqlens,
+                cu_seqlens_kv=global_cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_kv=max_seqlen,
+                qkv_format="thd"
+            )
             output_tensor = model(
                 input_ids=minibatch["states"],
                 attention_mask=None,
@@ -118,7 +131,7 @@ class MegatronWorker(Worker):
                 packed_seq_params=packed_seq_params
             )
 
-            return output_tensor, partial(f, minibatch, packed_seq_params)
+            return output_tensor, partial(f, minibatch, cu_seqlens)
 
         forward_backward = get_forward_backward_func()
         output = forward_backward(

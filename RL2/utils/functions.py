@@ -77,7 +77,11 @@ def compute_entropy(logits, logsumexp, process_group):
     )
 
 def compute_logps_and_entropy(
-    logits, minibatch, process_group, return_entropy=False
+    logits,
+    minibatch,
+    process_group,
+    prefix=None,
+    return_entropy=False
 ):
             
     logsumexp = compute_logsumexp(logits, process_group)
@@ -86,15 +90,13 @@ def compute_logps_and_entropy(
         minibatch["actions"],
         process_group
     )
-    logps = (action_logits - logsumexp) * minibatch["action_mask"]
+    key = f"{prefix}_logps" if prefix else "logps"
+    minibatch[key] = (action_logits - logsumexp) * minibatch["action_mask"]
 
     if return_entropy:
-        entropy = compute_entropy(
+        minibatch["entropy"] = compute_entropy(
             logits, logsumexp, process_group
         ) * minibatch["action_mask"]
-        return logps, entropy
-    else:
-        return logps
 
 def aggregate_values(
     tensor,

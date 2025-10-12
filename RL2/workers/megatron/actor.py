@@ -1,10 +1,8 @@
 from functools import partial
 import torch
 from megatron.core import parallel_state as mpu
-
-from RL2.workers.megatron import MegatronWorker, forward_step
-from RL2.utils.sequences import count_total
-from RL2.utils.megatron.context_parallelism import gather_along_cp
+from RL2.workers.megatron import MegatronWorker
+from RL2.utils.sequences import count_total, gather_along_cp
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
@@ -30,15 +28,15 @@ class MegatronActor(MegatronWorker):
 
         prefix = "old" if self.train else "ref"
         self.model.eval()
-        def f(minibatch, packed_seq_lens, logits, non_loss_data=True):
+        def f(minibatch, cu_seqlens, logits, non_loss_data=True):
 
-            minibatch[f"{prefix}_logps"] = compute_logps_and_entropy(
+            compute_logps_and_entropy(
                 logits,
                 minibatch,
                 mpu.get_tensor_model_parallel_group(),
                 return_entropy=False
             )
-            minibatch = gather_along_cp(minibatch, packed_seq_lens)
+            minibatch = gather_along_cp(minibatch, cu_seqlens)
             return minibatch
         
         minibatches = self.forward_backward(f, minibatches, step, False)
@@ -56,15 +54,15 @@ class MegatronActor(MegatronWorker):
             mpu.get_data_parallel_group()
         )
 
-        def f(minibatch, packed_seq_lens, logits):
+        def f(minibatch, cu_seqlens, logits):
 
-            minibatch["logps"] = compute_logps_and_entropy(
+            compute_logps_and_entropy(
                 logits,
                 minibatch,
                 mpu.get_tensor_model_parallel_group(),
                 return_entropy=False
             )
-            minibatch = gather_along_cp(minibatch, packed_seq_lens)
+            minibatch = gather_along_cp(minibatch, cu_seqlens)
             loss = aggregate_values(
                 - minibatch["logps"],
                 minibatch["action_mask"],
@@ -84,15 +82,15 @@ class MegatronActor(MegatronWorker):
             minibatches, "eos_mask", mpu.get_data_parallel_group()
         ) // 2
 
-        def f(minibatch, packed_seq_lens, logits):
+        def f(minibatch, cu_seqlens, logits):
 
-            minibatch["logps"] = compute_logps_and_entropy(
+            compute_logps_and_entropy(
                 logits,
                 minibatch,
                 mpu.get_tensor_model_parallel_group(),
                 return_entropy=False
             )
-            minibatch = gather_along_cp(minibatch, packed_seq_lens)
+            minibatch = gather_along_cp(minibatch, cu_seqlens)
             loss, metric = dpo_loss(
                 minibatch["logps"],
                 minibatch["ref_logps"],
@@ -109,7 +107,7 @@ class MegatronActor(MegatronWorker):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_device(torch.cuda.current_device())
 
-        def f(minibatch, packed_seq_lens, logits):
+        def f(minibatch, cu_seqlens, logits):
             pass
 
         self.model.train()
