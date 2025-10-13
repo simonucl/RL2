@@ -1,8 +1,8 @@
 defaults:
 - _self_
 - actor: fsdp
-- ref_actor: fsdp
-- critic: fsdp
+- ref_actor: ${actor}
+- critic: ${actor}
 
 train_data:
   path: null

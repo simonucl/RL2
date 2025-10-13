@@ -1,7 +1,7 @@
 defaults:
 - _self_
 - actor: fsdp
-- ref_actor: fsdp
+- ref_actor: ${actor}
 
 data:
   path: null
