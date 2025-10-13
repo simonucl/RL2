@@ -14,7 +14,6 @@ from RL2.utils.communication import initialize_global_process_group
 from RL2.utils.algorithms import (
     compute_approx_kl, compute_advantages
 )
-from RL2.utils.sglang import make_request
 from RL2.utils.logging import time_logger
 
 
@@ -60,9 +59,7 @@ class PPOTrainer(Trainer):
         if save_dir is None or (save_dir == "latest" and not glob.glob(f"{self.config.trainer.save_dir}/step*")):
             return 0
         if self.rollout.device_mesh["tp"].get_local_rank() == 0:
-            make_request(
-                self.rollout.worker_url, "release_memory_occupation"
-            )
+            self.rollout.make_request("release_memory_occupation")
         step = super().load_ckpt((self.actor, self.critic))
         self.rollout.update(self.actor, step)
         return step
