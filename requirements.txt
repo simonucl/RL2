@@ -3,7 +3,7 @@ ninja
 ring-flash-attn==0.1.8
 torch
 tqdm
-transformers
+transformers==4.53.0
 wandb
 flash-attn
 torchdata
