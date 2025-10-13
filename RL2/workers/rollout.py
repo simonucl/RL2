@@ -280,6 +280,3 @@ class Rollout:
                     "flush_cache": (idx == len(state_dict) - 1)
                 }
                 self.make_request("update_weights_from_tensor", payload)
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("resume_memory_occupation", {"tags": ["kv_cache"]})
