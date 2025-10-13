@@ -18,6 +18,9 @@ from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
 
+def postprocess_output(response):
+    tensor_dict, metrics, last_response = response
+    return last_response
 
 class Rollout(Worker):
 
@@ -120,12 +123,8 @@ class Rollout(Worker):
         tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
         return tensor_dict
 
-    def postprocess(self, response):
-        tensor_dict, _ = response
-        states = tensor_dict["states"]
-        return self.tokenizer.decode(states)
     
-    @weave.op(postprocess_output=postprocess)
+    @weave.op(postprocess_output=postprocess_output)
     async def rollout(self, ex, train):
 
         state_text = (
@@ -180,8 +179,9 @@ class Rollout(Worker):
 
         metric["n_turns"].append(turn)
         metric["scores"].append(sum(scores))
+        last_response = self.tokenizer.decode(state_dict["states"])
 
-        return tensor_dicts, metric
+        return tensor_dicts, metric, last_response
 
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
@@ -213,7 +213,7 @@ class Rollout(Worker):
 
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            all_tensor_dicts, metrics = map(list, zip(*outputs))
+            all_tensor_dicts, metrics, _ = map(list, zip(*outputs))
 
             suffix = "train" if train else "test"
             metrics = {
