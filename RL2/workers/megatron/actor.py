@@ -21,7 +21,7 @@ class MegatronActor(MegatronWorker):
     @torch.no_grad()
     def compute_logps(self, tensor_dict, step):
         minibatches = self.scatter_data(tensor_dict)
-        self.load_model_to_device(torch.cuda.current_device())
+        self.load_model_to_gpu()
 
         prefix = "old" if self.train else "ref"
         self.model.eval()
@@ -41,7 +41,7 @@ class MegatronActor(MegatronWorker):
         
         minibatches = self.forward_backward(f, minibatches, step, False)
 
-        self.load_model_to_device("cpu")
+        self.offload_model_to_cpu()
         return self.gather_data(minibatches)
 
     @time_logger("update_actor")
@@ -118,7 +118,7 @@ class MegatronActor(MegatronWorker):
         if step < self.config.freeze_steps:
             return
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
-        self.load_model_to_device(torch.cuda.current_device())
+        self.load_model_to_gpu()
 
         self.model.train()
         for batch in batches:

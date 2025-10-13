@@ -1,5 +1,6 @@
 from functools import partial
 from omegaconf import OmegaConf
+import gc
 import torch
 import torch.distributed as dist
 from transformers import AutoConfig
@@ -13,9 +14,9 @@ from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.dist_checkpointing.serialization import (
-        get_default_load_sharded_strategy,
-        get_default_save_sharded_strategy
-    )
+    get_default_load_sharded_strategy,
+    get_default_save_sharded_strategy
+)
 from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper
@@ -116,6 +117,51 @@ class MegatronWorker(Worker):
     def gather_data(self, minibatches):
         return gather_data(minibatches, mpu.get_data_parallel_group())
 
+    def offload_model_to_cpu(self):
+
+        for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
+            for buffer in buffers:
+                if buffer.param_data.storage().size() > 0:
+                    buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
+                    buffer.param_data_size = buffer.param_data.storage().size()
+                    buffer.param_data.storage().resize_(0)
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def load_model_to_gpu(self):
+
+        for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
+            for buffer in buffers:
+                if buffer.param_data.storage().size() == 0:
+                    buffer.param_data.storage().resize_(buffer.param_data_size)
+                    buffer.param_data.copy_(
+                        buffer.param_data.cpu_data,
+                        non_blocking=True
+                    )
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def load_optimizer_to_device(self, device):
+
+        for optimizer in self.optimizer.chained_optimizers:
+            for group in optimizer.shard_fp32_from_float16_groups:
+                for param in group:
+                    param.data = param.data.to(device, non_blocking=True)
+            for value in optimizer.optimizer.state.values():
+                if "exp_avg" in value:
+                    value["exp_avg"] = value["exp_avg"].to(
+                        device, non_blocking=True
+                    )
+                if "exp_avg_sq" in value:
+                    value["exp_avg_sq"] = value["exp_avg_sq"].to(
+                        device, non_blocking=True
+                    )
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
     def scale_loss(self, loss):
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
@@ -159,8 +205,10 @@ class MegatronWorker(Worker):
             forward_only=not torch.is_grad_enabled()
         )
         if torch.is_grad_enabled():
+            self.load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
             self.optimizer.zero_grad()
+            self.load_optimizer_to_device("cpu")
             self.scheduler.step(1)
             if mpu.is_pipeline_last_stage():
                 metrics = {
