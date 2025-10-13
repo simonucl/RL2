@@ -39,7 +39,7 @@ class MegatronActor(MegatronWorker):
                 cu_seqlens
             )
         
-        minibatches = self.forward_backward(f, minibatches, step, False)
+        minibatches = self.forward_backward(f, minibatches, step)
 
         self.offload_model_to_cpu()
         return self.gather_data(minibatches)
@@ -155,5 +155,12 @@ class MegatronActor(MegatronWorker):
                 clipped_objective = minibatch["advantages"] * clipped_ratio
                 losses = - torch.min(objective, clipped_objective)
                 clip_ratios = objective > clipped_objective
+
+                if self.config.tis_coef > 0:
+                    # https://fengyao.notion.site/off-policy-rl
+                    tis = torch.exp(
+                        minibatch["logps"].detach() - minibatch["llm_logps"]
+                    ).clamp(max=self.config.tis_coef)
+                    losses *= tis
             
             self.forward_backward(f, batch, step)

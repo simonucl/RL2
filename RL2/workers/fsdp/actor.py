@@ -174,7 +174,9 @@ class FSDPActor(FSDPWorker):
                     minibatch, return_entropy=True
                 )
                 ratio = torch.exp(
-                    minibatch["logps"] - minibatch.get("old_logps", minibatch["logps"].detach())
+                    minibatch["logps"] - minibatch.get(
+                        "old_logps", minibatch["logps"].detach()
+                    )
                 )
                 clipped_ratio = torch.clamp(
                     ratio, 1 - self.config.clip, 1 + self.config.clip
