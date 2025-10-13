@@ -209,8 +209,8 @@ class MegatronWorker(Worker):
         )
         output = broadcast_object(
             output,
-            group=mpu.get_pipeline_parallel_group(),
-            group_src=mpu.get_pipeline_parallel_world_size() - 1
+            group=mpu.get_pipeline_model_parallel_group(),
+            group_src=mpu.get_pipeline_model_parallel_last_rank()
         )
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
