@@ -65,7 +65,7 @@ class Trainer:
             checkpoint_id=f"{save_dir}/trainer"
         )
 
-    def save_model(self, workers, rm=False):
+    def save_model(self, workers):
 
         save_dir = self.config.trainer.save_dir
         if self.config.trainer.save_freq is not None:
@@ -73,4 +73,4 @@ class Trainer:
         
         for worker in workers:
             if worker is not None:
-                worker.save_model(save_dir, rm)
+                worker.save_model(save_dir)

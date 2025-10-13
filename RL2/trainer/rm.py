@@ -39,7 +39,7 @@ class RMTrainer(Trainer):
                 step += 1
                 self.critic.rm_update(tensor_dict, step)
                 self.save_ckpt((self.critic,), step)
-        self.save_model((self.critic,), rm=True)
+        self.save_model((self.critic,))
 
 
 @hydra.main(config_path="config", config_name="rm", version_base=None)

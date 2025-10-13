@@ -9,10 +9,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict
 )
-from transformers import (
-    AutoModelForSequenceClassification,
-    get_scheduler
-)
+from transformers import get_scheduler
 from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
@@ -191,22 +188,13 @@ class FSDPWorker(Worker):
             checkpoint_id=checkpoint_id
         )
 
-    def save_model(self, save_dir, rm):
+    def save_model(self, save_dir):
 
         state_dict = self.get_model_state_dict(full_state_dict=True)
         if dist.get_rank() == 0:
 
             self.tokenizer.save_pretrained(save_dir)
-            # unwrap the model
-            model_to_save = self.model.module
-            if rm:
-                # For RM, we load token classification model for simplicity 
-                # but save sequence classification model for compatibility.
-                with torch.device("meta"):
-                    model_to_save = AutoModelForSequenceClassification.from_config(
-                        model_to_save.config
-                    )
-            model_to_save.save_pretrained(
+            self.model.module.save_pretrained(
                 save_dir, state_dict=state_dict
             )
 
