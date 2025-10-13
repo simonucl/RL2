@@ -151,23 +151,24 @@ def gather_data(minibatches, process_group):
             minibatch["eos_mask"].argmax(-1).max().item()
             for minibatch in minibatches
         ])
-        minibatches = [
-            {k: v[:, :length] for k, v in minibatch.items()}
-            for minibatch in minibatches
-        ]
+        processed_minibatches = []
+        for minibatch in minibatches:
+            pad_tokens = length - minibatch["states"].shape[-1]
+            if pad_tokens > 0:
+                minibatch = {
+                    k: F.pad(v, (0, pad_tokens), value=0)
+                    for k, v in minibatch.items()
+                }
+            else:
+                minibatch = {
+                    k: v[:, :length] for k, v in minibatch.items()
+                }
+            processed_minibatches.append(minibatch)
         tensor_dict = {
             k: torch.cat([
-                minibatch[k] for minibatch in minibatches
+                minibatch[k] for minibatch in processed_minibatches
             ])
             for k in minibatches[0].keys()
-        }
-
-        reversed_indices = len(SHUFFLE_INDICES) * [None]
-        for idx, shuffle_idx in enumerate(SHUFFLE_INDICES):
-            reversed_indices[shuffle_idx] = idx
-        tensor_dict = {
-            k: v[reversed_indices]
-            for k, v in tensor_dict.items()
         }
 
         if PAD_SEQUENCES > 0:
