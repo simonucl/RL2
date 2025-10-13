@@ -13,6 +13,11 @@ class RLDataset(BaseDataset):
         if "prompt" in ex.keys():
             data["prompt"] = ex["prompt"]
         elif "messages" in ex.keys():
+            if "add_boxed_prompt" in self.config:
+                add_boxed_prompt = "Please reason step by step, and put your final answer within \\boxed{}."
+                user_prompt = ex["messages"][-1]["content"]
+                ex["messages"][-1]["content"] = f"{user_prompt}\n{add_boxed_prompt}"
+                
             data["prompt"] = self.tokenizer.apply_chat_template(
                 ex["messages"],
                 add_generation_prompt=True,
