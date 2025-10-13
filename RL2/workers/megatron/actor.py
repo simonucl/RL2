@@ -176,7 +176,7 @@ class MegatronActor(MegatronWorker):
                     losses *= tis
 
                 loss, clip_ratio, entropy = aggregate_values(
-                    (losses, clip_ratios, entropy),
+                    (losses, clip_ratios, minibatch["entropy"]),
                     minibatch["action_mask"],
                     self.config.avg_level,
                     total_actions,
@@ -216,3 +216,5 @@ class MegatronActor(MegatronWorker):
         state_dict = self.bridge.export_weights(self.model)
         rollout.update(state_dict)
         self.offload_model_to_cpu()
+        if rollout.device_mesh["tp"].get_local_rank() == 0:
+            rollout.make_request("resume_memory_occupation", {"tags": ["kv_cache"]})

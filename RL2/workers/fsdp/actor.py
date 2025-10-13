@@ -194,7 +194,7 @@ class FSDPActor(FSDPWorker):
                     losses *= tis
                     
                 loss, clip_ratio, entropy = aggregate_values(
-                    (losses, clip_ratios, entropy),
+                    (losses, clip_ratios, minibatch["entropy"]),
                     minibatch["action_mask"],
                     self.config.avg_level,
                     total_actions,
@@ -232,3 +232,5 @@ class FSDPActor(FSDPWorker):
 
         state_dict = self.get_model_state_dict(cpu_offload=False)
         rollout.update(state_dict)
+        if rollout.device_mesh["tp"].get_local_rank() == 0:
+            rollout.make_request("resume_memory_occupation", {"tags": ["kv_cache"]})
