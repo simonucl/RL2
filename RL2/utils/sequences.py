@@ -86,11 +86,11 @@ def scatter_data(
     tensor_dict,
     process_group,
     max_length_per_dp,
-    num_batches : int = 1,
-    pair : bool = False
+    num_batches=None,
+    pair=False
 ):
 
-    if num_batches > 1:
+    if num_batches is not None:
         if dist.get_rank() == 0:
             batch_size = math.ceil(len(tensor_dict["states"]) / num_batches)
             batches = []

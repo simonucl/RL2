@@ -112,7 +112,7 @@ class MegatronWorker(Worker):
             tensor_dict,
             mpu.get_data_parallel_group(),
             max_length_per_dp,
-            self.config.update_per_rollout if pack_minibatches else 1,
+            self.config.update_per_rollout if pack_minibatches else None,
             pair
         )
 
