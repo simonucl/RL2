@@ -9,6 +9,17 @@ def initialize_global_process_group(timeout_second=36000):
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
 
+def broadcast_object(obj, src=None, group=None, group_src=None):
+    
+    object_list = [obj]
+    dist.broadcast_object_list(
+        object_list,
+        src=src,
+        group=group,
+        group_src=group_src
+    )
+    return object_list[0]
+
 def gather_and_concat_list(lst, process_group):
 
     lists = (

@@ -23,6 +23,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
 )
 from mbridge import AutoBridge
 from RL2.workers import Worker
+from RL2.utils.communication import broadcast_object
 from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
 
 
@@ -206,20 +207,27 @@ class MegatronWorker(Worker):
             forward_only=not torch.is_grad_enabled(),
             collect_non_loss_data=not torch.is_grad_enabled()
         )
+        output = broadcast_object(
+            output,
+            group=mpu.get_pipeline_parallel_group(),
+            group_src=mpu.get_pipeline_parallel_world_size() - 1
+        )
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
             self.optimizer.zero_grad()
             self.load_optimizer_to_device("cpu")
             self.scheduler.step(1)
-            if mpu.is_pipeline_last_stage():
-                metrics = {
-                    k: sum([metric[k] for metric in output], [])
-                    for k in output[0].keys()
-                }
-                return metrics, grad_norm
+            metrics = {
+                k: sum([metric[k] for metric in output], [])
+                for k in output[0].keys()
+            }
+            return metrics, grad_norm
         else:
             return output
+
+    def get_model_state_dict(self):
+        return self.bridge.export_weights(self.model)
 
     def get_ckpt(self):
 

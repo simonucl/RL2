@@ -49,8 +49,7 @@ class MegatronActor(MegatronWorker):
         minibatches = self.forward_backward(f, minibatches)
 
         self.offload_model_to_cpu()
-        if mpu.is_pipeline_last_stage():
-            return self.gather_data(minibatches)
+        return self.gather_data(minibatches)
 
     @time_logger("update_actor")
     def sft_update(self, tensor_dict, step):
@@ -83,11 +82,9 @@ class MegatronActor(MegatronWorker):
             )
             return self.scale_loss(loss), 1, {"loss": [loss.item()]}
 
-        output = self.forward_backward(f, minibatches)
-        if mpu.is_pipeline_last_stage():
-            metrics, grad_norm = output
-            metrics["grad_norm"] = [grad_norm]
-            gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        metrics, grad_norm = self.forward_backward(f, minibatches)
+        metrics["grad_norm"] = [grad_norm]
+        gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
     def dpo_update(self, tensor_dict, step):
@@ -123,11 +120,9 @@ class MegatronActor(MegatronWorker):
             }
             return self.scale_loss(loss), 1, metric
 
-        output = self.forward_backward(f, minibatches)
-        if mpu.is_pipeline_last_stage():
-            metrics, grad_norm = output
-            metrics["grad_norm"] = [grad_norm]
-            gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        metrics, grad_norm = self.forward_backward(f, minibatches)
+        metrics["grad_norm"] = [grad_norm]
+        gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
     def ppo_update(self, tensor_dict, step):
@@ -204,14 +199,12 @@ class MegatronActor(MegatronWorker):
 
                 return self.scale_loss(loss), 1, metric
             
-            output = self.forward_backward(f, batch)
-            if mpu.is_pipeline_last_stage():
-                metric, grad_norm = output
-                for k, v in metric.items():
-                    metrics[k].append(
-                        gather_and_reduce(v, mpu.get_data_parallel_group())
-                    )
-                metrics["actor/grad_norm"].append(grad_norm)
+            metric, grad_norm = self.forward_backward(f, batch)
+            for k, v in metric.items():
+                metrics[k].append(
+                    gather_and_reduce(v, mpu.get_data_parallel_group())
+                )
+            metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
         self.load_model_to_cpu()

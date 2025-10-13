@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import torch.distributed as dist
-from RL2.utils.commication import gather_and_concat_list
+from RL2.utils.commication import broadcast_object, gather_and_concat_list
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
 def tensor_dict_to_minibatches(
@@ -117,12 +117,10 @@ def scatter_data(
         minibatches = tensor_dict_to_minibatches(
             tensor_dict, dp_size, max_length_per_dp, pair
         )
-    object_list = [minibatches] if dist.get_rank() == 0 else [None]
-    dist.broadcast_object_list(
-        object_list,
+    minibatches = broadcast_object(
+        minibatches if dist.get_rank() == 0 else None,
         src=0
     )
-    minibatches = object_list[0]
     chunk_size = len(minibatches) // dp_size
     minibatches = minibatches[dp_rank * chunk_size:(dp_rank + 1) * chunk_size]
     return [
