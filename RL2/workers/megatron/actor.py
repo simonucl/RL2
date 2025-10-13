@@ -1,3 +1,4 @@
+from collections import defaultdict
 import torch
 import torch.nn.functional as F
 from megatron.core import parallel_state as mpu
@@ -6,7 +7,13 @@ from RL2.utils.sequences import count_total, gather_along_cp
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.logging import time_logger
+from RL2.utils.algorithms import compute_approx_kl
+from RL2.utils.logging import (
+    time_logger,
+    gather_and_log,
+    gather_and_reduce,
+    rank0_log
+)
 
 
 class MegatronActor(MegatronWorker):
@@ -24,7 +31,7 @@ class MegatronActor(MegatronWorker):
         self.load_model_to_gpu()
 
         prefix = "old" if self.train else "ref"
-        self.model.eval()
+        self.model[0].eval()
         def f(minibatch, cu_seqlens, logits, non_loss_data=True):
 
             compute_logps_and_entropy(
@@ -39,10 +46,11 @@ class MegatronActor(MegatronWorker):
                 cu_seqlens
             )
         
-        minibatches = self.forward_backward(f, minibatches, step)
+        minibatches = self.forward_backward(f, minibatches)
 
         self.offload_model_to_cpu()
-        return self.gather_data(minibatches)
+        if mpu.is_pipeline_last_stage():
+            return self.gather_data(minibatches)
 
     @time_logger("update_actor")
     def sft_update(self, tensor_dict, step):
@@ -75,7 +83,11 @@ class MegatronActor(MegatronWorker):
             )
             return self.scale_loss(loss), 1, {"loss": [loss.item()]}
 
-        self.forward_backward(f, minibatches, step)
+        output = self.forward_backward(f, minibatches)
+        if mpu.is_pipeline_last_stage():
+            metrics, grad_norm = output
+            metrics["grad_norm"] = [grad_norm]
+            gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
     def dpo_update(self, tensor_dict, step):
@@ -103,15 +115,19 @@ class MegatronActor(MegatronWorker):
             reward_margins = chosen_rewards - rejected_rewards
             loss = - F.logsigmoid(reward_margins).sum() / total_pairs
             metric = {
-                "rewards/chosen": chosen_rewards.to_list(),
-                "rewards/rejected": rejected_rewards.to_list(),
-                "rewards/margin": reward_margins.to_list(),
+                "rewards/chosen": chosen_rewards.tolist(),
+                "rewards/rejected": rejected_rewards.tolist(),
+                "rewards/margin": reward_margins.tolist(),
                 "loss": [loss.item()],
                 "accuracy": (reward_margins > 0).tolist()
             }
             return self.scale_loss(loss), 1, metric
 
-        self.forward_backward(f, minibatches, step)
+        output = self.forward_backward(f, minibatches)
+        if mpu.is_pipeline_last_stage():
+            metrics, grad_norm = output
+            metrics["grad_norm"] = [grad_norm]
+            gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
     def ppo_update(self, tensor_dict, step):
@@ -120,7 +136,8 @@ class MegatronActor(MegatronWorker):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_gpu()
 
-        self.model.train()
+        self.model[0].train()
+        metrics = defaultdict(list)
         for batch in batches:
 
             total_actions, total_sequences = count_total(
@@ -162,5 +179,39 @@ class MegatronActor(MegatronWorker):
                         minibatch["logps"].detach() - minibatch["llm_logps"]
                     ).clamp(max=self.config.tis_coef)
                     losses *= tis
+
+                loss, clip_ratio, entropy = aggregate_values(
+                    (losses, clip_ratios, entropy),
+                    minibatch["action_mask"],
+                    self.config.avg_level,
+                    total_actions,
+                    total_sequences
+                )
+                loss = loss - self.config.entropy.coef * entropy
+                if self.config.kl.coef > 0 and self.config.kl.type == "loss":
+                    kl_loss = compute_approx_kl(
+                        minibatch["logps"],
+                        minibatch["ref_logps"],
+                        self.config.kl.loss_estimator
+                    ).sum() / total_actions
+                    loss = loss + self.config.kl.coef * kl_loss
+
+                metric = {
+                    "entropy": [entropy.item()],
+                    "loss": [loss.item()],
+                    "clip_ratio": [clip_ratio.item()],
+                }
+
+                return self.scale_loss(loss), 1, metric
             
-            self.forward_backward(f, batch, step)
+            output = self.forward_backward(f, batch)
+            if mpu.is_pipeline_last_stage():
+                metric, grad_norm = output
+                for k, v in metric.items():
+                    metrics[k].append(
+                        gather_and_reduce(v, mpu.get_data_parallel_group())
+                    )
+                metrics["actor/grad_norm"].append(grad_norm)
+
+        rank0_log(metrics, step)
+        self.load_model_to_cpu()

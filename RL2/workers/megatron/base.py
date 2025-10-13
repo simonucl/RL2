@@ -24,7 +24,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
 from mbridge import AutoBridge
 from RL2.workers import Worker
 from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
-from RL2.utils.logging import gather_and_log
+
 
 
 class MegatronWorker(Worker):
@@ -165,7 +165,7 @@ class MegatronWorker(Worker):
     def scale_loss(self, loss):
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
-    def forward_backward(self, f, minibatches, step):
+    def forward_backward(self, f, minibatches):
 
         def forward_step(data_iterator, model):
 
@@ -202,7 +202,8 @@ class MegatronWorker(Worker):
             forward_step_func=forward_step,
             seq_length=1,
             micro_batch_size=1,
-            forward_only=not torch.is_grad_enabled()
+            forward_only=not torch.is_grad_enabled(),
+            collect_non_loss_data=not torch.is_grad_enabled()
         )
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
@@ -215,8 +216,7 @@ class MegatronWorker(Worker):
                     k: sum([metric[k] for metric in output], [])
                     for k in output[0].keys()
                 }
-                metrics["grad_norm"] = [grad_norm]
-                gather_and_log(metrics, step, mpu.get_data_parallel_group())
+                return metrics, grad_norm
         else:
             return output
 
