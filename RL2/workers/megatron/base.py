@@ -156,7 +156,7 @@ class MegatronWorker(Worker):
             if mpu.is_pipeline_last_stage():
                 metrics = {
                     k: sum([metric[k] for metric in output], [])
-                    for k in metrics[0].keys()
+                    for k in output[0].keys()
                 }
                 metrics["grad_norm"] = [grad_norm]
                 gather_and_log(metrics, step, mpu.get_data_parallel_group())

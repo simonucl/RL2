@@ -73,7 +73,7 @@ class MegatronActor(MegatronWorker):
                 total_actions,
                 total_sequences
             )
-            return self.scale_loss(loss), 1, {"loss": loss.item()}
+            return self.scale_loss(loss), 1, {"loss": [loss.item()]}
 
         self.forward_backward(f, minibatches, step)
 
