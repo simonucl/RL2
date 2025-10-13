@@ -8,7 +8,7 @@ We deliver a clear implementation without complicated abstractions.
 Despite the simplicity, you should be able to scale up to moderate-sized, *e.g.*, 72B, language models with
 
 * Training engine partition via [Fully Sharded Data Parallelism](https://docs.pytorch.org/docs/stable/fsdp.html) and [Tensor Parallelism](https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html)
-* Sequence partition via [Llama Context Parallelism](https://github.com/zhuzilin/ring-flash-attention)
+* Sequence partition via [ZigZag Context Parallelism](https://github.com/zhuzilin/ring-flash-attention)
 * Inference engine and KV cache partition via Tensor Parallelism
 
 We also support
@@ -200,7 +200,7 @@ The default algorithm is [Dr. GRPO](https://arxiv.org/abs/2503.20783), where the
 
 This project is built upon the basis of many remarkable projects, including but not limited to
 * [DeepSpeedChat](https://github.com/deepspeedai/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat) for the proposal of hybrid engine
-* [RingFlashAttention](https://github.com/zhuzilin/ring-flash-attention) for the support of Llama context parallelism
+* [RingFlashAttention](https://github.com/zhuzilin/ring-flash-attention) for the support of ZigZag context parallelism
 * [SGLang](https://github.com/sgl-project/sglang) for the support of async inference engine
 
 We also thank [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF) and [veRL](https://github.com/volcengine/verl) for their pioneering work.
