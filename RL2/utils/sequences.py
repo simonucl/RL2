@@ -148,7 +148,7 @@ def gather_data(minibatches, process_group):
     if dist.get_rank() == 0:
         
         length = max([
-            minibatch["eos_mask"].argmax(-1).max().item()
+            (minibatch["eos_mask"].argmax(-1) + 1).max().item()
             for minibatch in minibatches
         ])
         processed_minibatches = []
@@ -177,7 +177,13 @@ def gather_data(minibatches, process_group):
                 for k, v in tensor_dict.items()
             }
 
-        return tensor_dict
+        reversed_indices = len(SHUFFLE_INDICES) * [None]
+        for idx, shuffle_idx in enumerate(SHUFFLE_INDICES):
+            reversed_indices[shuffle_idx] = idx
+        return {
+            k: v[reversed_indices]
+            for k, v in tensor_dict.items()
+        }
 
 def count_total(minibatches, key, process_group):
 
