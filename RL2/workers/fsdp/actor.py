@@ -226,3 +226,9 @@ class FSDPActor(FSDPWorker):
 
         rank0_log(metrics, step)
         self.load_model_to_device("cpu")
+
+    @time_logger("update_rollout")
+    def update_rollout(self, rollout, step):
+
+        state_dict = self.get_model_state_dict(cpu_offload=False)
+        rollout.update(state_dict)

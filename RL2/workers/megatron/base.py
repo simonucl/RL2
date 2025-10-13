@@ -226,9 +226,6 @@ class MegatronWorker(Worker):
         else:
             return output
 
-    def get_model_state_dict(self):
-        return self.bridge.export_weights(self.model)
-
     def get_ckpt(self):
 
         ckpt = {"model": self.model[0].sharded_state_dict()}

@@ -208,3 +208,9 @@ class MegatronActor(MegatronWorker):
 
         rank0_log(metrics, step)
         self.load_model_to_cpu()
+
+    @time_logger("update_rollout")
+    def update_rollout(self, rollout, step):
+
+        state_dict = self.bridge.export_weights(self.model)
+        rollout.update(state_dict)

@@ -117,7 +117,7 @@ class PPOTrainer(Trainer):
                     (self.actor, self.critic), step
                 )
 
-                self.rollout.update(self.actor, step)
+                self.actor.update_rollout(self.rollout, step)
                 if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)

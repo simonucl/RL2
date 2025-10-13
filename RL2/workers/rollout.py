@@ -242,10 +242,8 @@ class Rollout:
 
         return None, None
         
-    @time_logger("update_rollout")
-    def update(self, actor, step):
+    def update(self, state_dict):
 
-        state_dict = actor.get_model_state_dict(cpu_offload=False)
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
@@ -282,7 +280,6 @@ class Rollout:
                     "flush_cache": (idx == len(state_dict) - 1)
                 }
                 self.make_request("update_weights_from_tensor", payload)
-        dist.barrier()
-        state_dict.clear()
+
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.make_request("resume_memory_occupation", {"tags": ["kv_cache"]})
