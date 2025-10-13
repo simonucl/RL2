@@ -1,15 +1,12 @@
-from functools import partial
 import torch
+import torch.nn.functional as F
 from megatron.core import parallel_state as mpu
 from RL2.workers.megatron import MegatronWorker
 from RL2.utils.sequences import count_total, gather_along_cp
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.algorithms import (
-    dpo_loss
-)
-from RL2.utils.logging import time_logger, gather_and_log
+from RL2.utils.logging import time_logger
 
 
 class MegatronActor(MegatronWorker):
@@ -34,10 +31,13 @@ class MegatronActor(MegatronWorker):
                 logits,
                 minibatch,
                 mpu.get_tensor_model_parallel_group(),
-                return_entropy=False
+                prefix
             )
-            minibatch = gather_along_cp(minibatch, cu_seqlens)
-            return minibatch
+            return gather_along_cp(
+                minibatch,
+                mpu.get_context_parallel_group(),
+                cu_seqlens
+            )
         
         minibatches = self.forward_backward(f, minibatches, step, False)
 
@@ -59,10 +59,13 @@ class MegatronActor(MegatronWorker):
             compute_logps_and_entropy(
                 logits,
                 minibatch,
-                mpu.get_tensor_model_parallel_group(),
-                return_entropy=False
+                mpu.get_tensor_model_parallel_group()
             )
-            minibatch = gather_along_cp(minibatch, cu_seqlens)
+            minibatch = gather_along_cp(
+                minibatch,
+                mpu.get_context_parallel_group(),
+                cu_seqlens
+            )
             loss = aggregate_values(
                 - minibatch["logps"],
                 minibatch["action_mask"],
@@ -87,16 +90,26 @@ class MegatronActor(MegatronWorker):
             compute_logps_and_entropy(
                 logits,
                 minibatch,
-                mpu.get_tensor_model_parallel_group(),
-                return_entropy=False
+                mpu.get_tensor_model_parallel_group()
             )
-            minibatch = gather_along_cp(minibatch, cu_seqlens)
-            loss, metric = dpo_loss(
-                minibatch["logps"],
-                minibatch["ref_logps"],
-                self.config.beta
+            minibatch = gather_along_cp(
+                minibatch,
+                mpu.get_context_parallel_group(),
+                cu_seqlens
             )
-            return self.scale_loss(loss.sum() / total_pairs), 1, metric
+            chosen_rewards, rejected_rewards = self.config.beta * (
+                minibatch["logps"] - minibatch["ref_logps"]
+            ).sum(-1).view(-1, 2).T
+            reward_margins = chosen_rewards - rejected_rewards
+            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            metric = {
+                "rewards/chosen": chosen_rewards.to_list(),
+                "rewards/rejected": rejected_rewards.to_list(),
+                "rewards/margin": reward_margins.to_list(),
+                "loss": [loss.item()],
+                "accuracy": (reward_margins > 0).tolist()
+            }
+            return self.scale_loss(loss), 1, metric
 
         self.forward_backward(f, minibatches, step)
 
@@ -107,9 +120,6 @@ class MegatronActor(MegatronWorker):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_device(torch.cuda.current_device())
 
-        def f(minibatch, cu_seqlens, logits):
-            pass
-
         self.model.train()
         for batch in batches:
 
@@ -118,5 +128,32 @@ class MegatronActor(MegatronWorker):
                 ("action_mask", "eos_mask"),
                 mpu.get_data_parallel_group()
             )
+
+            def f(minibatch, cu_seqlens, logits):
+            
+                compute_logps_and_entropy(
+                    logits,
+                    minibatch,
+                    mpu.get_tensor_model_parallel_group(),
+                    return_entropy=True
+                )
+                minibatch = gather_along_cp(
+                    minibatch,
+                    mpu.get_context_parallel_group(),
+                    cu_seqlens
+                )
+
+                ratio = torch.exp(
+                    minibatch["logps"] - minibatch.get(
+                        "old_logps", minibatch["logps"].detach()
+                    )
+                )
+                clipped_ratio = torch.clamp(
+                    ratio, 1 - self.config.clip, 1 + self.config.clip
+                )
+                objective = minibatch["advantages"] * ratio
+                clipped_objective = minibatch["advantages"] * clipped_ratio
+                losses = - torch.min(objective, clipped_objective)
+                clip_ratios = objective > clipped_objective
             
             self.forward_backward(f, batch, step)
