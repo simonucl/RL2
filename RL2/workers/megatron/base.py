@@ -227,9 +227,9 @@ class MegatronWorker(Worker):
             return output
 
     def get_ckpt(self):
-
+        # TODO: load model to GPU
         ckpt = {"model": self.model[0].sharded_state_dict()}
-        ckpt["optimizer"] = self.optimizer.shardedstate_dict(ckpt)
+        ckpt["optimizer"] = self.optimizer.sharded_state_dict(ckpt)
         ckpt["scheduler"] = self.scheduler.state_dict()
         return ckpt
 
