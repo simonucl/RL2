@@ -242,15 +242,15 @@ class Rollout:
 
         return None, None
         
-    def update(self, state_dict):
+    def update(self, named_tensor_generator):
 
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("resume_memory_occupation", {"tags": ["weights"]})
+            self.make_request("resume_memory_occupation")
         
-        for idx, (name, tensor) in enumerate(state_dict.items()):
+        for name, tensor in named_tensor_generator:
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )
@@ -277,6 +277,8 @@ class Rollout:
                 ]
                 payload = {
                     "serialized_named_tensors": serialized_named_tensors,
-                    "flush_cache": (idx == len(state_dict) - 1)
+                    "flush_cache": False
                 }
                 self.make_request("update_weights_from_tensor", payload)
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            requests.get(f"{self.worker_url}/flush_cache")

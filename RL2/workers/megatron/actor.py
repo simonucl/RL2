@@ -213,8 +213,6 @@ class MegatronActor(MegatronWorker):
     def update_rollout(self, rollout, step):
 
         self.load_model_to_gpu()
-        state_dict = self.bridge.export_weights(self.model)
-        rollout.update(state_dict)
+        named_tensor_generator = self.bridge.export_weights(self.model)
+        rollout.update(named_tensor_generator)
         self.offload_model_to_cpu()
-        if rollout.device_mesh["tp"].get_local_rank() == 0:
-            rollout.make_request("resume_memory_occupation", {"tags": ["kv_cache"]})
