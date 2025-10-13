@@ -1,6 +1,7 @@
 from functools import partial
 from omegaconf import OmegaConf
 import torch
+import torch.distributed as dist
 from transformers import AutoConfig
 from megatron.core import (
     parallel_state as mpu,
@@ -12,7 +13,7 @@ from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.packed_seq_params import PackedSeqParams
 from mbridge import AutoBridge
 from RL2.workers import Worker
-from RL2.utils.sequences import scatter_data, slide_along_cp
+from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
 from RL2.utils.logging import gather_and_log
 
 
@@ -53,6 +54,8 @@ class MegatronWorker(Worker):
 
             optimizer_config = OmegaConf.to_container(self.config.optimizer)
             optimizer_config = OptimizerConfig(
+                bf16=True,
+                params_dtype=torch.bfloat16,
                 use_distributed_optimizer=True,
                 **optimizer_config
             )
@@ -101,6 +104,9 @@ class MegatronWorker(Worker):
             pair
         )
 
+    def gather_data(self, minibatches):
+        return gather_data(minibatches, mpu.get_data_parallel_group())
+
     def scale_loss(self, loss):
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
@@ -134,7 +140,7 @@ class MegatronWorker(Worker):
             return output_tensor, partial(f, minibatch, cu_seqlens)
 
         forward_backward = get_forward_backward_func()
-        metrics = forward_backward(
+        output = forward_backward(
             model=self.model,
             data_iterator=iter(minibatches),
             num_microbatches=len(minibatches),
@@ -149,10 +155,17 @@ class MegatronWorker(Worker):
             self.scheduler.step(1)
             if mpu.is_pipeline_last_stage():
                 metrics = {
-                    k: [metric[k] for metric in metrics]
+                    k: sum([metric[k] for metric in output], [])
                     for k in metrics[0].keys()
                 }
                 metrics["grad_norm"] = [grad_norm]
                 gather_and_log(metrics, step, mpu.get_data_parallel_group())
         else:
-            return metrics
+            return output
+
+    def save_model(self, save_dir):
+
+        self.bridge.save_weights(self.model, save_dir)
+        if dist.get_rank() == 0:
+            self.tokenizer.save_pretrained(save_dir)
+        dist.barrier()
