@@ -12,6 +12,7 @@ from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
+import weave
 from RL2.workers import Worker
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
@@ -119,6 +120,12 @@ class Rollout(Worker):
         tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
         return tensor_dict
 
+    def postprocess(self, response):
+        tensor_dict, _ = response
+        states = tensor_dict["states"]
+        return self.tokenizer.decode(states)
+    
+    @weave.op(postprocess_output=postprocess)
     async def rollout(self, ex, train):
 
         state_text = (
