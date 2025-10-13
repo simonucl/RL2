@@ -5,12 +5,21 @@ import torch.distributed as dist
 from transformers import AutoConfig
 from megatron.core import (
     parallel_state as mpu,
-    tensor_parallel
+    tensor_parallel,
+    dist_checkpointing
 )
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.packed_seq_params import PackedSeqParams
+from megatron.core.dist_checkpointing.serialization import (
+        get_default_load_sharded_strategy,
+        get_default_save_sharded_strategy
+    )
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper
+)
 from mbridge import AutoBridge
 from RL2.workers import Worker
 from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
@@ -162,6 +171,43 @@ class MegatronWorker(Worker):
                 gather_and_log(metrics, step, mpu.get_data_parallel_group())
         else:
             return output
+
+    def get_ckpt(self):
+
+        ckpt = {"model": self.model[0].sharded_state_dict()}
+        ckpt["optimizer"] = self.optimizer.shardedstate_dict(ckpt)
+        ckpt["scheduler"] = self.scheduler.state_dict()
+        return ckpt
+
+    def load_ckpt(self, save_dir):
+        
+        ckpt = self.get_ckpt()
+        sharded_strategy = get_default_load_sharded_strategy(save_dir)
+        sharded_strategy = FullyParallelLoadStrategyWrapper(
+            sharded_strategy,
+            mpu.get_data_parallel_group(with_context_parallel=True)
+        )
+        ckpt = dist_checkpointing.load(
+            ckpt,
+            save_dir,
+            sharded_strategy=sharded_strategy
+        )
+        self.model[0].load_state_dict(ckpt["model"])
+        self.optimizer.load_state_dict(ckpt["optimizer"])
+        self.scheduler.load_state_dict(ckpt["scheduler"])
+
+    def save_ckpt(self, save_dir):
+
+        sharded_strategy = get_default_save_sharded_strategy("torch_dist")
+        sharded_strategy = FullyParallelSaveStrategyWrapper(
+            sharded_strategy,
+            mpu.get_data_parallel_group(with_context_parallel=True)
+        )
+        dist_checkpointing.save(
+            self.get_ckpt(),
+            save_dir,
+            sharded_strategy=sharded_strategy
+        )
 
     def save_model(self, save_dir):
 
