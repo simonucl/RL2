@@ -4,7 +4,7 @@ from tqdm import tqdm
 from RL2.trainer import Trainer
 from RL2.datasets import SFTDataset, get_dataloader
 from RL2.workers import initialize_actor
-from RL2.utils.commication import initialize_global_process_group
+from RL2.utils.communication import initialize_global_process_group
 
 
 class SFTTrainer(Trainer):

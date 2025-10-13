@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 import torch.distributed as dist
-from RL2.utils.commication import broadcast_object, gather_and_concat_list
+from RL2.utils.communication import broadcast_object, gather_and_concat_list
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
 def tensor_dict_to_minibatches(
