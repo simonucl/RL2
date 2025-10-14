@@ -209,7 +209,7 @@ class Rollout:
             }
             gather_and_log(metrics, step)
 
-        dist.barrier(dist.group.WORLD)
+        dist.barrier()
 
         if not train:
             return
@@ -253,7 +253,7 @@ class Rollout:
     def update(self, named_tensor_generator):
 
         torch.cuda.empty_cache()
-        dist.barrier(dist.group.WORLD)
+        dist.barrier()
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.make_request("resume_memory_occupation")
