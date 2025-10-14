@@ -268,4 +268,4 @@ class MegatronWorker(Worker):
         self.bridge.save_weights(self.model, save_dir)
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
-        dist.barrier()
+        dist.barrier(dist.group.WORLD)

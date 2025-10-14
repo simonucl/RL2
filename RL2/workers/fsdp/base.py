@@ -199,4 +199,4 @@ class FSDPWorker(Worker):
                 save_dir, state_dict=state_dict
             )
 
-        dist.barrier()
+        dist.barrier(dist.group.WORLD)
