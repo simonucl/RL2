@@ -1,4 +1,5 @@
 from omegaconf import OmegaConf
+from accelerate import init_empty_weights
 import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
@@ -14,16 +15,6 @@ from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
 from RL2.utils.sequences import scatter_data, gather_data
-
-# TODO: why offloading is incompatible with initialization on meta device?
-def init_weight_context(worker):
-    if any([
-        dist.get_rank() == 0,
-        worker.device_mesh["tp"].size() > 1 and worker.device_mesh["tp"].get_local_rank() == 0,
-        getattr(worker.config, "offload_model", False)
-    ]):
-        return torch.device("cpu")
-    return torch.device("meta")
 
 
 class FSDPWorker(Worker):
@@ -48,6 +39,16 @@ class FSDPWorker(Worker):
             mesh_dim_names=("dp", "cp", "tp"),
             mesh_shape=(self.dp_size, self.config.cp_size, self.config.tp_size)
         )
+
+    def init_weight_context(self):
+        # TODO: why offloading is incompatible with initialization on meta device?
+        if any([
+            dist.get_rank() == 0,
+            self.device_mesh["tp"].size() > 1 and self.device_mesh["tp"].get_local_rank() == 0,
+            getattr(self.config, "offload_model", False)
+        ]):
+            return torch.device("cpu")
+        return init_empty_weights()
 
     def prepare_model_optimizer(self):
 

@@ -2,7 +2,7 @@ from collections import defaultdict
 import torch
 import torch.nn.functional as F
 from transformers import  AutoModelForTokenClassification
-from RL2.workers.fsdp import FSDPWorker, init_weight_context
+from RL2.workers.fsdp import FSDPWorker
 from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
 from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import aggregate_values
@@ -20,7 +20,7 @@ class FSDPCritic(FSDPWorker):
     def __init__(self, config):
         super().__init__(config, True)
 
-        with init_weight_context(self):
+        with self.init_weight_context():
             self.model = AutoModelForTokenClassification.from_pretrained(
                 config.model_name,
                 num_labels=1,

@@ -1,1 +1,1 @@
-from .base import FSDPWorker, init_weight_context
+from .base import FSDPWorker
