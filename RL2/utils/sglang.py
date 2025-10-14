@@ -5,7 +5,7 @@ import socket
 import requests
 import multiprocessing
 import torch.distributed as dist
-from sglang.srt.patch_torch import monkey_patch_torch_reductions
+from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang_router.launch_router import RouterArgs, launch_router
@@ -48,6 +48,7 @@ def launch_server_process(server_args):
         enable_memory_saver=True,
         host=get_host(),
         port=get_available_port(),
+        log_level="error",
         **server_args
     )
     process = multiprocessing.Process(
@@ -73,7 +74,8 @@ def launch_router_process(worker_urls):
     router_args = RouterArgs(
         worker_urls=worker_urls,
         host=get_host(),
-        port=get_available_port()
+        port=get_available_port(),
+        log_level="error"
     )
     process = multiprocessing.Process(
         target=launch_router, args=(router_args,)
