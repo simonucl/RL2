@@ -84,25 +84,26 @@ class Rollout:
 
     def make_request(self, endpoint, method="POST", payload=None):
 
-        while True:
-            try:
-                if method == "POST":
-                    response = requests.post(
-                        f"{self.worker_url}/{endpoint}",
-                        json=payload or {}
-                    )
-                elif method == "GET":
-                    response = requests.get(
-                        f"{self.worker_url}/{endpoint}"
-                    )
-                else:
-                    raise NotImplementedError
-                response.raise_for_status()
-                return
-            except NotImplementedError:
-                raise
-            except:
-                time.sleep(1)
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            while True:
+                try:
+                    if method == "POST":
+                        response = requests.post(
+                            f"{self.worker_url}/{endpoint}",
+                            json=payload or {}
+                        )
+                    elif method == "GET":
+                        response = requests.get(
+                            f"{self.worker_url}/{endpoint}"
+                        )
+                    else:
+                        raise NotImplementedError
+                    response.raise_for_status()
+                    return
+                except NotImplementedError:
+                    raise
+                except:
+                    time.sleep(1)
 
     async def async_generate(self, states, sampling_params):
         
@@ -214,8 +215,7 @@ class Rollout:
         if not train:
             return
 
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("release_memory_occupation")
+        self.make_request("release_memory_occupation")
 
         if dist.get_rank() == 0:
 
@@ -255,8 +255,7 @@ class Rollout:
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("resume_memory_occupation")
+        self.make_request("resume_memory_occupation")
         
         for name, tensor in named_tensor_generator:
             serialized_tensor = MultiprocessingSerializer.serialize(
@@ -288,5 +287,4 @@ class Rollout:
                     "flush_cache": False
                 }
                 self.make_request("update_weights_from_tensor", payload=payload)
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.make_request("flush_cache", "GET")
+        self.make_request("flush_cache", "GET")

@@ -58,10 +58,9 @@ class PPOTrainer(Trainer):
         save_dir = self.config.trainer.load_ckpt_from
         if save_dir is None or (save_dir == "latest" and not glob.glob(f"{self.config.trainer.save_dir}/step*")):
             return 0
-        if self.rollout.device_mesh["tp"].get_local_rank() == 0:
-            self.rollout.make_request("release_memory_occupation")
+        self.rollout.make_request("release_memory_occupation")
         step = super().load_ckpt((self.actor, self.critic))
-        self.rollout.update(self.actor, step)
+        self.actor.update_rollout(self.rollout, step)
         return step
     
     @time_logger("compute_approx_kl")
