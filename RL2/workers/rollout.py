@@ -84,16 +84,25 @@ class Rollout:
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
-    def make_request(self, endpoint, payload=None):
+    def make_request(self, endpoint, method="POST", payload=None):
 
         while True:
             try:
-                response = requests.post(
-                    f"{self.worker_url}/{endpoint}",
-                    json=payload or {}
-                )
+                if method == "POST":
+                    response = requests.post(
+                        f"{self.worker_url}/{endpoint}",
+                        json=payload or {}
+                    )
+                elif method == "GET":
+                    response = requests.get(
+                        f"{self.worker_url}/{endpoint}"
+                    )
+                else:
+                    raise NotImplementedError
                 response.raise_for_status()
                 return
+            except NotImplementedError:
+                raise
             except:
                 time.sleep(1)
 
@@ -280,6 +289,6 @@ class Rollout:
                     "serialized_named_tensors": serialized_named_tensors,
                     "flush_cache": False
                 }
-                self.make_request("update_weights_from_tensor", payload)
+                self.make_request("update_weights_from_tensor", payload=payload)
         if self.device_mesh["tp"].get_local_rank() == 0:
-            requests.get(f"{self.worker_url}/flush_cache")
+            self.make_request("flush_cache", "GET")
