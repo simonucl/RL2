@@ -42,8 +42,7 @@ class Trainer:
             )
         
         for worker in workers:
-            if worker is not None:
-                worker.load_ckpt(f"{save_dir}/{worker.__class__.__name__.lower()}")
+            worker.load_ckpt(f"{save_dir}/{worker.__class__.__name__.lower()}")
 
         ckpt = self.get_ckpt(0)
         dcp.load(ckpt, checkpoint_id=f"{save_dir}/trainer")
@@ -57,8 +56,7 @@ class Trainer:
 
         save_dir = f"{self.config.trainer.save_dir}/step{step}"
         for worker in workers:
-            if worker is not None:
-                worker.save_ckpt(f"{save_dir}/{worker.__class__.__name__.lower()}")
+            worker.save_ckpt(f"{save_dir}/{worker.__class__.__name__.lower()}")
 
         dcp.save(
             self.get_ckpt(step),
@@ -72,5 +70,4 @@ class Trainer:
             save_dir += "/latest"
         
         for worker in workers:
-            if worker is not None:
-                worker.save_model(save_dir)
+            worker.save_model(save_dir)

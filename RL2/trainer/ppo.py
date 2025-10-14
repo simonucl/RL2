@@ -35,8 +35,6 @@ class PPOTrainer(Trainer):
             self.critic.prepare_scheduler(
                 self.config.trainer.n_epochs * len(self.train_dataloader)
             )
-        else:
-            self.critic = None
         self.rollout = initialize_rollout(config.rollout)    
 
     def get_dataloader(self, train: bool):
@@ -53,13 +51,13 @@ class PPOTrainer(Trainer):
             if train else len(dataset)
         )
 
-    def load_ckpt(self):
+    def load_ckpt(self, workers):
 
         save_dir = self.config.trainer.load_ckpt_from
         if save_dir is None or (save_dir == "latest" and not glob.glob(f"{self.config.trainer.save_dir}/step*")):
             return 0
         self.rollout.make_request("release_memory_occupation")
-        step = super().load_ckpt((self.actor, self.critic))
+        step = super().load_ckpt(workers)
         self.actor.update_rollout(self.rollout, step)
         return step
     
@@ -79,7 +77,11 @@ class PPOTrainer(Trainer):
             
     def train(self):
 
-        step = self.load_ckpt()
+        step = self.load_ckpt(
+            (self.actor, self.critic)
+            if self.config.adv.estimator == "gae"
+            else (self.actor,)
+        )
         for epoch in range(
             step // len(self.train_dataloader),
             self.config.trainer.n_epochs
@@ -110,7 +112,10 @@ class PPOTrainer(Trainer):
                 if self.config.adv.estimator == "gae":
                     self.critic.ppo_update(tensor_dict, step)
                 self.save_ckpt(
-                    (self.actor, self.critic), step
+                    (self.actor, self.critic)
+                    if self.config.adv.estimator == "gae"
+                    else (self.actor,),
+                    step
                 )
 
                 self.actor.update_rollout(self.rollout, step)
@@ -118,7 +123,11 @@ class PPOTrainer(Trainer):
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)
 
-        self.save_model((self.actor, self.critic))
+        self.save_model(
+            (self.actor, self.critic)
+            if self.config.adv.estimator == "gae"
+            else (self.actor,)
+        )
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
