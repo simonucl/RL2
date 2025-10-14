@@ -241,7 +241,8 @@ class Rollout:
             return tensor_dict, cu_seqs
 
         return None, None
-        
+    
+    @torch.no_grad()
     def update(self, named_tensor_generator):
 
         torch.cuda.empty_cache()
