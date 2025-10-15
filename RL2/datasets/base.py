@@ -5,22 +5,6 @@ from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from torchdata.stateful_dataloader import StatefulDataLoader
 
-# TODO (P1): support concatnating multiple datasets
-def load_dataset(data_path):
-
-    if "@" in data_path:
-        split, data_path = data_path.split("@")
-    else:
-        split = "train"
-    
-    ext = os.path.splitext(data_path)[-1].strip(".")
-    if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
-        if ext == "jsonl":
-            ext = "json"
-        return datasets.load_dataset(ext, data_files=data_path, split=split)
-    else:
-        return datasets.load_dataset(data_path, split=split)
-
 def get_tensor_dict(
     states,
     actions,
@@ -68,11 +52,23 @@ class BaseDataset(Dataset):
     def __init__(self, config, tokenizer):
 
         self.config = config
-        self.dataset = (
-            load_dataset(config.path) if config.path else
-            [{} for _ in range(config.prompts_per_rollout)] # for Gym like environments
-        )
         self.tokenizer = tokenizer
+        
+        # TODO (P1): support concatnating multiple datasets
+        if not config.path:
+            self.dataset = [{} for _ in range(config.prompts_per_rollout)] # for Gym like environments
+        else:
+            if "@" in config.path:
+                split, path = config.path.split("@")
+            else:
+                split, path = "train", config.path
+            ext = os.path.splitext(path)[-1].strip(".")
+            if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
+                if ext == "jsonl":
+                    ext = "json"
+                self.dataset = datasets.load_dataset(ext, data_files=path, split=split)
+            else:
+                self.dataset = datasets.load_dataset(path, split=split)
 
     def tokenize_prompt_response(
         self, prompt, response, rm=False
