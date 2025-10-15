@@ -85,7 +85,7 @@ class FSDPCritic(FSDPWorker):
             loss = - F.logsigmoid(reward_margins).sum() / total_pairs
             self.scale_loss(loss).backward()
             metrics["loss"].append(loss.item())
-            metrics["accuray"].extend((reward_margins > 0).tolist())
+            metrics["accuracy"].extend((reward_margins > 0).tolist())
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
