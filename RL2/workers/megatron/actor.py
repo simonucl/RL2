@@ -35,7 +35,7 @@ class MegatronActor(MegatronWorker):
         def f(minibatch, cu_seqlens, logits, non_loss_data=True):
 
             compute_logps_and_entropy(
-                logits,
+                logits / getattr(self.config, "temperature", 1.0),
                 minibatch,
                 mpu.get_tensor_model_parallel_group(),
                 prefix
@@ -145,7 +145,7 @@ class MegatronActor(MegatronWorker):
             def f(minibatch, cu_seqlens, logits):
             
                 compute_logps_and_entropy(
-                    logits,
+                    logits / getattr(self.config, "temperature", 1.0),
                     minibatch,
                     mpu.get_tensor_model_parallel_group(),
                     return_entropy=True

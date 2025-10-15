@@ -55,13 +55,11 @@ class FSDPActor(FSDPWorker):
             input_ids=minibatch["states"],
             position_ids=minibatch["position_ids"],
             use_cache=False
-        ).logits.to(torch.float32) / getattr(
-            self.config, "temperature", 1.0
-        )
+        ).logits.to(torch.float32)
         # bfloat16 is unstable for the subsequent `logsumexp` operation.
         # See https://github.com/OpenRLHF/OpenRLHF/pull/634.
         compute_logps_and_entropy(
-            logits,
+            logits / getattr(self.config, "temperature", 1.0),
             minibatch,
             self.device_mesh["tp"].get_group(),
             prefix,
