@@ -14,11 +14,7 @@ from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
-from RL2.datasets import (
-    initialize_state_dict,
-    state_dict_to_tensor_dict,
-    pack_tensor_dicts
-)
+from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import (
     prepare_environment_variables,
     launch_server_process,
@@ -125,6 +121,27 @@ class Rollout:
                     await asyncio.sleep(1)
         
     async def rollout(self, data, train):
+
+        def initialize_state_dict(state_text):
+            states = self.tokenizer.encode(state_text, add_special_tokens=False)
+            return {
+                "states": states,
+                "actions": len(states) * [0],
+                "action_mask": len(states) * [0],
+                "logps": len(states) * [0],
+                "rewards": len(states) * [0]
+            }
+
+        def state_dict_to_tensor_dict(state_dict):
+
+            tensor_dict = get_tensor_dict(
+                state_dict["states"],
+                state_dict["actions"],
+                state_dict["action_mask"]
+            )
+            tensor_dict["llm_logps"] = torch.FloatTensor(state_dict["logps"][1:])
+            tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
+            return tensor_dict
 
         if "prompt" in data:
             state_text = data["prompt"]
