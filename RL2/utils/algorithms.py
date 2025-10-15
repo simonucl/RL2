@@ -24,8 +24,8 @@ def compute_approx_kl(
 def compute_gae(tensor_dict, gamma, lamda):
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
-    next_values = F.pad(tensor_dict["values"][:, 1:], (0, 1), value=0)
-    deltas = tensor_dict["rewards"] + gamma * next_values - tensor_dict["values"]
+    next_values = F.pad(tensor_dict["old_values"][:, 1:], (0, 1), value=0)
+    deltas = tensor_dict["rewards"] + gamma * next_values - tensor_dict["old_values"]
 
     # A_t = \delta_t + \gamma * \lambda * A_{t+1}
     gae, reversed_gaes = 0, []
@@ -33,7 +33,7 @@ def compute_gae(tensor_dict, gamma, lamda):
         gae = deltas[:, t] + gamma * lamda * gae
         reversed_gaes.append(gae)
     gaes = torch.stack(reversed_gaes[::-1], -1)
-    returns = gaes + tensor_dict["values"]
+    returns = gaes + tensor_dict["old_values"]
 
     action_gaes = gaes[torch.where(tensor_dict["action_mask"])]
     advantages = (gaes - action_gaes.mean()) * tensor_dict["action_mask"] / (
