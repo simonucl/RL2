@@ -149,7 +149,7 @@ class Rollout:
             state_text, data["extra_info"] = await self.env.reset(
                 data["extra_info"]
             )
-        state_dict = initialize_state_dict(self.tokenizer, state_text)
+        state_dict = initialize_state_dict(state_text)
         env_response = {"extra_info": data["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
@@ -185,17 +185,13 @@ class Rollout:
                 break
             if env_response["next_state"].startswith(state_text + action_text):
                 state_dict_delta = initialize_state_dict(
-                    self.tokenizer,
                     env_response["next_state"][len(state_text + action_text):]
                 )
                 for k, v in state_dict_delta.items():
                     state_dict[k].extend(v)
             else:
                 tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
-                state_dict = initialize_state_dict(
-                    self.tokenizer,
-                    env_response["next_state"]
-                )
+                state_dict = initialize_state_dict(env_response["next_state"])
             state_text = env_response["next_state"]
 
         metric["n_turns"].append(turn)
