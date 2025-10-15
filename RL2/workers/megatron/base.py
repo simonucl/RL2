@@ -75,6 +75,8 @@ class MegatronWorker(Worker):
                 optimizer_config, self.model
             )
 
+        self.offload_model_to_cpu()
+
     def prepare_scheduler(self, total_steps):
 
         num_training_steps = total_steps * getattr(
@@ -121,6 +123,9 @@ class MegatronWorker(Worker):
 
     def offload_model_to_cpu(self):
 
+        if not getattr(self.config, "offload_model", False):
+            return
+
         for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
             for buffer in buffers:
                 if buffer.param_data.storage().size() > 0:
@@ -132,6 +137,9 @@ class MegatronWorker(Worker):
         torch.cuda.empty_cache()
 
     def load_model_to_gpu(self):
+
+        if not getattr(self.config, "offload_model", False):
+            return
 
         for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
             for buffer in buffers:
@@ -146,6 +154,9 @@ class MegatronWorker(Worker):
         torch.cuda.empty_cache()
 
     def load_optimizer_to_device(self, device):
+
+        if not getattr(self.config, "offload_optimizer", False):
+            return
 
         for optimizer in self.optimizer.chained_optimizers:
             for group in optimizer.shard_fp32_from_float16_groups:
