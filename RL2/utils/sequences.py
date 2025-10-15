@@ -169,19 +169,21 @@ def gather_data(minibatches, process_group):
             for k in minibatches[0].keys()
         }
 
+        reversed_indices = len(SHUFFLE_INDICES) * [None]
+        for idx, shuffle_idx in enumerate(SHUFFLE_INDICES):
+            reversed_indices[shuffle_idx] = idx
+        tensor_dict = {
+            k: v[reversed_indices]
+            for k, v in tensor_dict.items()
+        }
+
         if PAD_SEQUENCES > 0:
             tensor_dict = {
                 k: v[:-PAD_SEQUENCES]
                 for k, v in tensor_dict.items()
             }
 
-        reversed_indices = len(SHUFFLE_INDICES) * [None]
-        for idx, shuffle_idx in enumerate(SHUFFLE_INDICES):
-            reversed_indices[shuffle_idx] = idx
-        return {
-            k: v[reversed_indices]
-            for k, v in tensor_dict.items()
-        }
+        return tensor_dict
 
 def count_total(minibatches, key, process_group):
 
