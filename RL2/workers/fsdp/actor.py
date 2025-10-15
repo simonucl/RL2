@@ -88,7 +88,8 @@ class FSDPActor(FSDPWorker):
             processed_minibatch = self.forward(minibatch, prefix)
             processed_minibatches.append(processed_minibatch)
 
-        self.load_model_to_device("cpu")
+        if not self.train:
+            self.load_model_to_device("cpu")
         return self.gather_data(processed_minibatches)
 
     @time_logger("update_actor")

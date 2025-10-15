@@ -20,7 +20,7 @@ class MegatronActor(MegatronWorker):
     
     def __init__(self, config, train: bool):
         super().__init__(config, train)
-
+        # TODO: wrap_with_ddp=train?
         self.model = self.bridge.get_model(wrap_with_ddp=True)
         self.prepare_model_optimizer()
 
@@ -48,7 +48,8 @@ class MegatronActor(MegatronWorker):
         
         minibatches = self.forward_backward(f, minibatches)
 
-        self.offload_model_to_cpu()
+        if not self.train:
+            self.offload_model_to_cpu()
         return self.gather_data(minibatches)
 
     @time_logger("update_actor")

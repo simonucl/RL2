@@ -96,12 +96,12 @@ class PPOTrainer(Trainer):
 
                 tensor_dict, cu_seqs = self.rollout(data_list, True, step)
 
-                if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
-                    tensor_dict = self.actor.compute_logps(tensor_dict, step)
                 if self.config.actor.kl.coef > 0:
                     tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
                 if self.config.adv.estimator == "gae":
                     tensor_dict = self.critic.compute_values(tensor_dict, step)
+                if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
+                    tensor_dict = self.actor.compute_logps(tensor_dict, step)
 
                 if dist.get_rank() == 0:
                     if self.config.actor.kl.coef > 0:
