@@ -1,5 +1,7 @@
+export no_proxy=127.0.0.1:7890,localhost,127.0.0.1,10.99.103.147,10.99.103.*
+
 torchrun \
-    --nproc_per_node=4 \
+    --nproc_per_node=8 \
     -m RL2.trainer.ppo \
     train_data.path=Chenmien/OpenReasonerZero \
     train_data.prompts_per_rollout=128 \
