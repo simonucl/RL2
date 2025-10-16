@@ -50,26 +50,7 @@ class Rollout:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
-            
-            # Validate worker URLs before launching router
-            valid_worker_urls = []
-            for url in worker_urls:
-                if url is not None:
-                    try:
-                        response = requests.get(f"{url}/health_generate", timeout=10)
-                        if response.status_code == 200:
-                            valid_worker_urls.append(url)
-                            print(f"✅ Worker {url} is healthy")
-                        else:
-                            print(f"❌ Worker {url} returned status {response.status_code}")
-                    except Exception as e:
-                        print(f"❌ Worker {url} is unreachable: {e}")
-            
-            if not valid_worker_urls:
-                raise RuntimeError("No valid worker URLs found!")
-            
-            print(f"Using {len(valid_worker_urls)}/{len([u for u in worker_urls if u is not None])} workers")
-            self.router_url = launch_router_process(valid_worker_urls)
+            self.router_url = launch_router_process(worker_urls)
 
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params

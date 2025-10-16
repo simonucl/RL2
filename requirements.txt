@@ -7,4 +7,5 @@ transformers
 wandb
 flash-attn
 torchdata
+sglang[all]
 sglang_router

@@ -5,7 +5,7 @@ torchrun \
     -m RL2.trainer.ppo \
     train_data.path=Chenmien/OpenReasonerZero \
     train_data.prompts_per_rollout=128 \
-    train_data.responses_per_prompt=64 \
+    train_data.responses_per_prompt=8 \
     test_data.path=Chenmien/OlympiadBench \
     actor.model_name=Qwen/Qwen2.5-7B \
     actor.cp_size=2 \
