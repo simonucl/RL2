@@ -193,9 +193,9 @@ class MegatronActor(MegatronWorker):
                     loss = loss + self.config.kl.coef * kl_loss
 
                 metric = {
-                    "entropy": [entropy.item()],
-                    "loss": [loss.item()],
-                    "clip_ratio": [clip_ratio.item()],
+                    "actor/entropy": [entropy.item()],
+                    "actor/loss": [loss.item()],
+                    "actor/clip_ratio": [clip_ratio.item()],
                 }
 
                 return self.scale_loss(loss), 1, metric

@@ -119,8 +119,8 @@ class MegatronCritic(MegatronWorker):
                 )
 
                 metric = {
-                    "loss": [loss.item()],
-                    "clip_ratio": [clip_ratio.item()]
+                    "critic/loss": [loss.item()],
+                    "critic/clip_ratio": [clip_ratio.item()]
                 }
 
                 return self.scale_loss(loss), 1, metric
