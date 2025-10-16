@@ -33,12 +33,8 @@ def get_state_dict(worker, full_state_dict=False):
             state_dict = get_model_state_dict(base_model, options=options)
             worker.model.unmerge_adapter()
 
-        # Extract only base layer weights and clean up names
         state_dict = extract_base_layer_weights(state_dict)
-
-        # Unmerge to restore training state
         worker.model.unmerge_adapter()
-
         return state_dict
 
     options = StateDictOptions(
@@ -72,14 +68,11 @@ def get_ckpt(trainer, workers, step):
 def load_worker_ckpt(worker, ckpt):
 
     if hasattr(worker.model, 'peft_config'):
-        # Load LoRA adapters
-        from peft import set_peft_model_state_dict
-        set_peft_model_state_dict(worker.model, ckpt["model"])
-    else:
-        # Normal FSDP state dict loading
-        set_model_state_dict(
-            worker.model, ckpt["model"]
-        )
+        from peft import set_peft_model_state_dict as set_model_state_dict
+
+    set_model_state_dict(
+        worker.model, ckpt["model"]
+    )
     worker.optimizer.load_state_dict(ckpt["optimizer"])
     worker.scheduler.load_state_dict(ckpt["scheduler"])
 
@@ -127,19 +120,28 @@ def save_model(trainer, worker, rm=False):
     if trainer.config.trainer.save_freq is not None:
         save_dir += "/latest"
 
-    state_dict = get_state_dict(worker, full_state_dict=True)
+    state_dict = get_state_dict(
+        worker, full_state_dict=True
+    )
     if dist.get_rank() == 0:
         worker.tokenizer.save_pretrained(save_dir)
         # unwrap the model
         model_to_save = worker.model.module
         if rm:
-            model_to_save = AutoModelForSequenceClassification.from_config(
-                model_to_save.config
-            )
+            # For RM, we load token classification model for simplicity 
+            # but save sequence classification model for compatibility.
+            with torch.device("meta"):
+                model_to_save = AutoModelForSequenceClassification.from_config(
+                    model_to_save.config
+                )
         elif hasattr(worker.model, 'peft_config'):
-            model_to_save.save_pretrained(save_dir + "/lora_adapters")
+            model_to_save.save_pretrained(
+                save_dir + "/lora_adapters"
+            )
             model_to_save = model_to_save.get_base_model()
 
-        model_to_save.save_pretrained(save_dir, state_dict=state_dict)
+        model_to_save.save_pretrained(
+            save_dir, state_dict=state_dict
+        )
 
     dist.barrier()

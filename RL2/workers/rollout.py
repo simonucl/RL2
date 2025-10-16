@@ -264,7 +264,7 @@ class Rollout:
     
     @torch.no_grad()
     def update(self, named_tensor_generator):
-        
+
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM

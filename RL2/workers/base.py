@@ -15,11 +15,8 @@ class Worker:
 =======
         )
 
-        # Parse LoRA configuration
         self.lora_config = getattr(config, 'lora', None)
         self.use_lora = self.lora_config and getattr(self.lora_config, 'use_lora', False)
-
-        # Validate LoRA compatibility
         if self.use_lora:
             if self.config.tp_size > 1:
                 raise NotImplementedError(
@@ -56,17 +53,14 @@ class Worker:
         if self.train and self.config.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        # Apply LoRA BEFORE any parallelism wrappers
         if self.use_lora and self.train:
             from peft import LoraConfig, get_peft_model, TaskType
-
-            # Determine task type based on model class
             if hasattr(self.model, 'lm_head'):
                 task_type = TaskType.CAUSAL_LM
             elif hasattr(self.model, 'score'):
                 task_type = TaskType.SEQ_CLS
             else:
-                task_type = TaskType.CAUSAL_LM  # default
+                task_type = TaskType.CAUSAL_LM
 
             peft_config = LoraConfig(
                 task_type=task_type,
