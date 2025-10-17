@@ -1,5 +1,4 @@
 import hydra
-import glob
 import torch.distributed as dist
 from tqdm import tqdm
 import wandb
@@ -50,16 +49,6 @@ class PPOTrainer(Trainer):
             self.config.train_data.prompts_per_rollout
             if train else len(dataset)
         )
-
-    def load_ckpt(self, workers):
-
-        save_dir = self.config.trainer.load_ckpt_from
-        if save_dir is None or (save_dir == "latest" and not glob.glob(f"{self.config.trainer.save_dir}/step*")):
-            return 0
-        self.rollout.make_request("release_memory_occupation")
-        step = super().load_ckpt(workers)
-        self.actor.update_rollout(self.rollout, step)
-        return step
     
     @time_logger("compute_approx_kl")
     def compute_approx_kl(self, tensor_dict, step):

@@ -242,8 +242,10 @@ class MegatronWorker(Worker):
     def get_ckpt(self):
         # TODO: load model to GPU
         ckpt = {"model": self.model[0].sharded_state_dict()}
-        ckpt["optimizer"] = self.optimizer.sharded_state_dict(ckpt)
-        ckpt["scheduler"] = self.scheduler.state_dict()
+        ckpt = {
+            "optimizer": self.optimizer.sharded_state_dict(ckpt),
+            "scheduler": self.scheduler.state_dict()
+        }
         return ckpt
 
     def load_ckpt(self, save_dir):
@@ -259,12 +261,12 @@ class MegatronWorker(Worker):
             save_dir,
             sharded_strategy=sharded_strategy
         )
-        self.model[0].load_state_dict(ckpt["model"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.scheduler.load_state_dict(ckpt["scheduler"])
 
     def save_ckpt(self, save_dir):
 
+        self.save_model(f"{save_dir}/model")
         sharded_strategy = get_default_save_sharded_strategy("torch_dist")
         sharded_strategy = FullyParallelSaveStrategyWrapper(
             sharded_strategy,
@@ -272,7 +274,7 @@ class MegatronWorker(Worker):
         )
         dist_checkpointing.save(
             self.get_ckpt(),
-            save_dir,
+            f"{save_dir}/optimizer_scheduler",
             sharded_strategy=sharded_strategy
         )
 
