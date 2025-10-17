@@ -46,10 +46,10 @@ pip install rl-square
 **Using Pre-built Docker Images:**
 ```bash
 # FSDP backend only
-docker pull simon011130/rl2:latest
+docker pull rlsquare/rl2:latest
 
 # Megatron backend (includes FSDP)
-docker pull slimerl/slime:latest
+docker pull rlsquare/rl2-megatron:latest
 ```
 
 ### Data Preperation [[Examples]](https://huggingface.co/Chenmien/datasets)
