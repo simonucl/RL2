@@ -1,6 +1,7 @@
-from functools import partial
 from omegaconf import OmegaConf
+import os
 import gc
+from functools import partial
 import torch
 import torch.distributed as dist
 from transformers import AutoConfig
@@ -48,6 +49,7 @@ class MegatronWorker(Worker):
     def prepare_device_mesh(self):
 
         if not mpu.is_initialized():
+            # TODO: support vpp
             mpu.initialize_model_parallel(
                 pipeline_model_parallel_size=self.config.pp_size,
                 context_parallel_size=self.config.cp_size,
@@ -242,7 +244,7 @@ class MegatronWorker(Worker):
             return output
 
     def get_ckpt(self):
-        # TODO: load model to GPU
+
         ckpt = {}
         for vpp_rank, model in enumerate(self.model):
             if len(self.model) > 1:
@@ -282,6 +284,7 @@ class MegatronWorker(Worker):
             sharded_strategy,
             mpu.get_data_parallel_group(with_context_parallel=True)
         )
+        os.makedirs(f"{save_dir}/optimizer_scheduler", exist_ok=True)
         dist_checkpointing.save(
             self.get_ckpt(),
             f"{save_dir}/optimizer_scheduler",
@@ -290,7 +293,9 @@ class MegatronWorker(Worker):
 
     def save_model(self, save_dir):
 
+        self.load_model_to_gpu()
         self.bridge.save_weights(self.model, save_dir)
+        self.offload_model_to_cpu()
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
         dist.barrier()
