@@ -241,7 +241,15 @@ class MegatronWorker(Worker):
 
     def get_ckpt(self):
         # TODO: load model to GPU
-        ckpt = {"model": self.model[0].sharded_state_dict()}
+        ckpt = {}
+        for vpp_rank, model in enumerate(self.model):
+            if len(self.model) > 1:
+                mpu.set_virtual_pipeline_model_parallel_rank(vpp_rank)
+            key = f"model{vpp_rank}" if len(self.model) > 1 else "model"
+            if hasattr(model, "module"):
+                model = model.module
+            ckpt[key] = model.sharded_state_dict()
+
         ckpt = {
             "optimizer": self.optimizer.sharded_state_dict(ckpt),
             "scheduler": self.scheduler.state_dict()
