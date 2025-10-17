@@ -31,7 +31,7 @@ class Rollout:
         self.prepare_device_mesh()
         prepare_environment_variables(self.device_mesh["tp"].get_group())
         if self.device_mesh["tp"].get_local_rank() == 0:
-
+            # TODO: serve multiple models
             self.worker_url = launch_server_process(config.server_args)
             worker_urls = [
                 None for _ in range(self.device_mesh["dp"].size())

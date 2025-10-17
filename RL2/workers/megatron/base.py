@@ -35,7 +35,7 @@ class MegatronWorker(Worker):
         super().__init__(config, train)
         
         config = AutoConfig.from_pretrained(config.model_name)
-        self.bridge = AutoBridge.from_config(config)
+        self.bridge = AutoBridge.from_config(config) # support Qwen3-Next
         tf_config = (
             OmegaConf.to_container(self.config.tf_config)
             if hasattr(self.config, "tf_config") else {}
@@ -86,7 +86,7 @@ class MegatronWorker(Worker):
         )
         lr_warmup_steps = int(self.config.warmup_ratio * num_training_steps)
         lr_decay_steps = num_training_steps - lr_warmup_steps
-
+        # TODO: more flexible config
         self.scheduler = OptimizerParamScheduler(
             self.optimizer,
             init_lr=0.0,
