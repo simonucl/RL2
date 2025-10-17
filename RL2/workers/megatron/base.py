@@ -35,7 +35,7 @@ class MegatronWorker(Worker):
         super().__init__(config, train)
         
         config = AutoConfig.from_pretrained(config.model_name)
-        self.bridge = AutoBridge.from_config(config) # support Qwen3-Next
+        self.bridge = AutoBridge.from_config(config) # TODO (P0): support Qwen3-Next
         tf_config = (
             OmegaConf.to_container(self.config.tf_config)
             if hasattr(self.config, "tf_config") else {}
