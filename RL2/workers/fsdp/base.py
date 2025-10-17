@@ -76,9 +76,9 @@ class FSDPWorker(Worker):
         num_training_steps = total_steps * getattr(
             self.config, "update_per_rollout", 1
         )
-        num_warmup_steps = int(self.config.warmup_ratio * num_training_steps)
+        num_warmup_steps = int(self.config.scheduler.warmup_ratio * num_training_steps)
         self.scheduler = get_scheduler(
-            self.config.scheduler,
+            self.config.scheduler.name,
             self.optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_training_steps
