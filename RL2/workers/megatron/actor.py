@@ -31,7 +31,8 @@ class MegatronActor(MegatronWorker):
         self.load_model_to_gpu()
 
         prefix = "old" if self.train else "ref"
-        self.model[0].eval()
+        for model in self.model:
+            model.eval()
         def f(minibatch, cu_seqlens, logits, non_loss_data=True):
 
             compute_logps_and_entropy(
@@ -132,7 +133,8 @@ class MegatronActor(MegatronWorker):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_gpu()
 
-        self.model[0].train()
+        for model in self.model:
+            model.train()
         metrics = defaultdict(list)
         for batch in batches:
 

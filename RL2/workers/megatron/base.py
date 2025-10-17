@@ -126,12 +126,13 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
-        for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
-            for buffer in buffers:
-                if buffer.param_data.storage().size() > 0:
-                    buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
-                    buffer.param_data_size = buffer.param_data.storage().size()
-                    buffer.param_data.storage().resize_(0)
+        for model in self.model:
+            for buffers in [model.buffers, model.expert_parallel_buffers]:
+                for buffer in buffers:
+                    if buffer.param_data.storage().size() > 0:
+                        buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
+                        buffer.param_data_size = buffer.param_data.storage().size()
+                        buffer.param_data.storage().resize_(0)
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -141,14 +142,15 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
-        for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
-            for buffer in buffers:
-                if buffer.param_data.storage().size() == 0:
-                    buffer.param_data.storage().resize_(buffer.param_data_size)
-                    buffer.param_data.copy_(
-                        buffer.param_data.cpu_data,
-                        non_blocking=True
-                    )
+        for model in self.model:
+            for buffers in [model.buffers, model.expert_parallel_buffers]:
+                for buffer in buffers:
+                    if buffer.param_data.storage().size() == 0:
+                        buffer.param_data.storage().resize_(buffer.param_data_size)
+                        buffer.param_data.copy_(
+                            buffer.param_data.cpu_data,
+                            non_blocking=True
+                        )
 
         gc.collect()
         torch.cuda.empty_cache()
