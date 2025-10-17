@@ -9,6 +9,20 @@ class Trainer:
     def __init__(self, config):
         
         OmegaConf.resolve(config)
+        self.load_dir = config.trainer.load_ckpt_from
+        if self.load_dir == "latest":
+            load_dirs = glob.glob(f"{config.trainer.save_dir}/step*")
+            self.load_dir = max(
+                load_dirs, key=lambda dir: int(dir.split("/step")[-1])
+            ) if load_dirs else None
+        if self.load_dir is not None:
+            if hasattr(config, "actor"):
+                config.actor.model_name = f"{self.load_dir}/actor/model"
+            if hasattr(config, "critic"):
+                config.critic.model_name = f"{self.load_dir}/critic/model"
+            if hasattr(config, "rollout"):
+                config.rollout.server_args.model_path = f"{self.load_dir}/actor/model"
+        
         self.config = config
 
         if dist.get_rank() == 0:
@@ -30,22 +44,14 @@ class Trainer:
 
     def load_ckpt(self, workers):
 
-        save_dir = self.config.trainer.load_ckpt_from
-        if save_dir is None:
+        if self.load_dir is None:
             return 0
-        if save_dir == "latest":
-            save_dirs = glob.glob(f"{self.config.trainer.save_dir}/step*")
-            if not save_dirs:
-                return 0
-            save_dir = max(
-                save_dirs, key=lambda dir: int(dir.split("/step")[-1])
-            )
-        
         for worker in workers:
-            worker.load_ckpt(f"{save_dir}/{worker.__class__.__name__.lower()}")
+            worker_name = "actor" if "Actor" in worker.__class__.__name__ else "critic"
+            worker.load_ckpt(f"{self.load_dir}/{worker_name}/optimizer_scheduler")
 
         ckpt = self.get_ckpt(0)
-        dcp.load(ckpt, checkpoint_id=f"{save_dir}/trainer")
+        dcp.load(ckpt, checkpoint_id=f"{self.load_dir}/trainer")
         self.train_dataloader.load_state_dict(ckpt["dataloader"])
         return ckpt["step"]
 
@@ -56,7 +62,8 @@ class Trainer:
 
         save_dir = f"{self.config.trainer.save_dir}/step{step}"
         for worker in workers:
-            worker.save_ckpt(f"{save_dir}/{worker.__class__.__name__.lower()}")
+            worker_name = "actor" if "Actor" in worker.__class__.__name__ else "critic"
+            worker.save_ckpt(f"{save_dir}/{worker_name}")
 
         dcp.save(
             self.get_ckpt(step),

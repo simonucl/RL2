@@ -1,6 +1,7 @@
-from functools import partial
 from omegaconf import OmegaConf
+import os
 import gc
+from functools import partial
 import torch
 import torch.distributed as dist
 from transformers import AutoConfig
@@ -48,6 +49,7 @@ class MegatronWorker(Worker):
     def prepare_device_mesh(self):
 
         if not mpu.is_initialized():
+            # TODO: support vpp
             mpu.initialize_model_parallel(
                 pipeline_model_parallel_size=self.config.pp_size,
                 context_parallel_size=self.config.cp_size,
@@ -126,12 +128,13 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
-        for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
-            for buffer in buffers:
-                if buffer.param_data.storage().size() > 0:
-                    buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
-                    buffer.param_data_size = buffer.param_data.storage().size()
-                    buffer.param_data.storage().resize_(0)
+        for model in self.model:
+            for buffers in [model.buffers, model.expert_parallel_buffers]:
+                for buffer in buffers:
+                    if buffer.param_data.storage().size() > 0:
+                        buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
+                        buffer.param_data_size = buffer.param_data.storage().size()
+                        buffer.param_data.storage().resize_(0)
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -141,14 +144,15 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
-        for buffers in [self.model[0].buffers, self.model[0].expert_parallel_buffers]:
-            for buffer in buffers:
-                if buffer.param_data.storage().size() == 0:
-                    buffer.param_data.storage().resize_(buffer.param_data_size)
-                    buffer.param_data.copy_(
-                        buffer.param_data.cpu_data,
-                        non_blocking=True
-                    )
+        for model in self.model:
+            for buffers in [model.buffers, model.expert_parallel_buffers]:
+                for buffer in buffers:
+                    if buffer.param_data.storage().size() == 0:
+                        buffer.param_data.storage().resize_(buffer.param_data_size)
+                        buffer.param_data.copy_(
+                            buffer.param_data.cpu_data,
+                            non_blocking=True
+                        )
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -226,6 +230,8 @@ class MegatronWorker(Worker):
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
+            for model in self.model:
+                model.zero_grad_buffer()
             self.optimizer.zero_grad()
             self.load_optimizer_to_device("cpu")
             self.scheduler.step(1)
@@ -238,10 +244,20 @@ class MegatronWorker(Worker):
             return output
 
     def get_ckpt(self):
-        # TODO: load model to GPU
-        ckpt = {"model": self.model[0].sharded_state_dict()}
-        ckpt["optimizer"] = self.optimizer.sharded_state_dict(ckpt)
-        ckpt["scheduler"] = self.scheduler.state_dict()
+
+        ckpt = {}
+        for vpp_rank, model in enumerate(self.model):
+            if len(self.model) > 1:
+                mpu.set_virtual_pipeline_model_parallel_rank(vpp_rank)
+            key = f"model{vpp_rank}" if len(self.model) > 1 else "model"
+            if hasattr(model, "module"):
+                model = model.module
+            ckpt[key] = model.sharded_state_dict()
+
+        ckpt = {
+            "optimizer": self.optimizer.sharded_state_dict(ckpt),
+            "scheduler": self.scheduler.state_dict()
+        }
         return ckpt
 
     def load_ckpt(self, save_dir):
@@ -257,26 +273,29 @@ class MegatronWorker(Worker):
             save_dir,
             sharded_strategy=sharded_strategy
         )
-        self.model[0].load_state_dict(ckpt["model"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.scheduler.load_state_dict(ckpt["scheduler"])
 
     def save_ckpt(self, save_dir):
 
+        self.save_model(f"{save_dir}/model")
         sharded_strategy = get_default_save_sharded_strategy("torch_dist")
         sharded_strategy = FullyParallelSaveStrategyWrapper(
             sharded_strategy,
             mpu.get_data_parallel_group(with_context_parallel=True)
         )
+        os.makedirs(f"{save_dir}/optimizer_scheduler", exist_ok=True)
         dist_checkpointing.save(
             self.get_ckpt(),
-            save_dir,
+            f"{save_dir}/optimizer_scheduler",
             sharded_strategy=sharded_strategy
         )
 
     def save_model(self, save_dir):
 
+        self.load_model_to_gpu()
         self.bridge.save_weights(self.model, save_dir)
+        self.offload_model_to_cpu()
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
         dist.barrier()

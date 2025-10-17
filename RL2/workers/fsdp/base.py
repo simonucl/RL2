@@ -7,8 +7,7 @@ from torch.distributed.fsdp._runtime_utils import _lazy_init
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
-    get_model_state_dict,
-    set_model_state_dict
+    get_model_state_dict
 )
 from transformers import get_scheduler
 from RL2.workers import Worker
@@ -167,7 +166,6 @@ class FSDPWorker(Worker):
 
     def get_ckpt(self):
         return {
-            "model": self.get_model_state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict()
         }
@@ -176,17 +174,15 @@ class FSDPWorker(Worker):
 
         ckpt = self.get_ckpt()
         dcp.load(ckpt, checkpoint_id=checkpoint_id)
-        self.load_model_to_device(torch.cuda.current_device())
-        set_model_state_dict(self.model, ckpt["model"])
-        self.load_model_to_device("cpu")
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.scheduler.load_state_dict(ckpt["scheduler"])
 
-    def save_ckpt(self, checkpoint_id):
-
+    def save_ckpt(self, save_dir):
+        
+        self.save_model(f"{save_dir}/model")
         dcp.save(
             self.get_ckpt(),
-            checkpoint_id=checkpoint_id
+            checkpoint_id=f"{save_dir}/optimizer_scheduler"
         )
 
     def save_model(self, save_dir):

@@ -38,8 +38,18 @@ Also check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenT
 
 ### Installation
 
+**From PyPI:**
 ```bash
 pip install rl-square
+```
+
+**Using Pre-built Docker Images:**
+```bash
+# FSDP backend only
+docker pull simon011130/rl2:latest
+
+# Megatron backend (includes FSDP)
+docker pull slimerl/slime:latest
 ```
 
 ### Data Preperation [[Examples]](https://huggingface.co/Chenmien/datasets)

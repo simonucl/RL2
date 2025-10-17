@@ -32,7 +32,8 @@ class MegatronCritic(MegatronWorker):
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_gpu()
 
-        self.model[0].eval()
+        for model in self.model:
+            model.eval()
         def f(minibatch, cu_seqlens, logits, non_loss_data=True):
 
             minibatch["old_values"] = logits.squeeze(-1) * minibatch["action_mask"]
@@ -81,7 +82,8 @@ class MegatronCritic(MegatronWorker):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_gpu()
 
-        self.model[0].train()
+        for model in self.model:
+            model.train()
         metrics = defaultdict(list)
         for batch in batches:
 
