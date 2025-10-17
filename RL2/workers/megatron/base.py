@@ -228,6 +228,8 @@ class MegatronWorker(Worker):
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
+            for model in self.model:
+                model.zero_grad_buffer()
             self.optimizer.zero_grad()
             self.load_optimizer_to_device("cpu")
             self.scheduler.step(1)
