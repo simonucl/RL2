@@ -6,38 +6,7 @@ including saving adapters from model state, loading them to the server,
 and unloading them.
 """
 
-import os
-import torch
-from typing import Optional, Dict, Callable
-
-
-def save_lora_adapters(model, save_dir: str, rank: int = 0) -> Optional[str]:
-    """
-    Save LoRA adapters from a PEFT model to a directory.
-
-    Args:
-        model: The PEFT model with LoRA adapters
-        save_dir: Directory to save the LoRA adapters
-        rank: Process rank (only rank 0 saves)
-
-    Returns:
-        Path to saved LoRA adapters if rank==0, None otherwise
-    """
-    if rank != 0:
-        return None
-
-    # Check if model has PEFT config (LoRA enabled)
-    if not hasattr(model, 'peft_config'):
-        return None
-
-    lora_save_path = os.path.join(save_dir, "lora_adapters")
-    os.makedirs(lora_save_path, exist_ok=True)
-
-    # Save LoRA adapters using PEFT's save_pretrained
-    model.save_pretrained(lora_save_path)
-
-    return lora_save_path
-
+from typing import Callable
 
 def load_lora_to_sglang(
     make_request: Callable,

@@ -23,7 +23,7 @@ from RL2.utils.sglang import (
     launch_router_process
 )
 from RL2.utils.logging import time_logger, gather_and_log
-from RL2.utils.lora import load_lora_to_sglang, unload_lora_from_sglang, save_lora_adapters
+from RL2.utils.lora import load_lora_to_sglang, unload_lora_from_sglang
 
 
 class Rollout:
@@ -276,8 +276,8 @@ class Rollout:
 
         return None, None
     
-    def _update_lora_on_server(self, model):
-        """Update LoRA adapters on SGLang server."""
+    def _update_lora_on_server(self, state_dict):
+        """Update LoRA adapters on SGLang server using state_dict (LoRA weights)."""
         if not self.lora_enabled:
             return
 
@@ -285,31 +285,33 @@ class Rollout:
             return
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            save_lora_adapters(model, temp_dir)
+            lora_save_path = os.path.join(temp_dir, "lora_adapters")
+            os.makedirs(lora_save_path, exist_ok=True)
+            torch.save(state_dict, os.path.join(lora_save_path, "adapter_model.bin"))
 
             if self.lora_loaded:
-                unload_lora_from_sglang(self.make_request, "actor_lora")
+                unload_lora_from_sglang(self.make_request, "default")
                 self.lora_loaded = False
 
-            load_lora_to_sglang(self.make_request, "actor_lora", temp_dir)
+            load_lora_to_sglang(self.make_request, "default", lora_save_path)
             self.lora_loaded = True
 
             if dist.get_rank() == 0:
-                print(f"✓ LoRA adapter 'actor_lora' loaded to SGLang server")
+                print(f"✓ LoRA adapter loaded to SGLang server")
 
     @torch.no_grad()
-    def update(self, named_tensor_generator, model=None):
+    def update(self, named_tensor_generator):
+
+        if self.lora_enabled:
+            self._update_lora_on_server(named_tensor_generator)
+            self.make_request("flush_cache", "GET")
+            return
 
         self.make_request("flush_cache", "GET")
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
         self.make_request("resume_memory_occupation")
-
-        if self.lora_enabled and model is not None:
-            self._update_lora_on_server(model)
-            self.make_request("flush_cache", "GET")
-            return
 
         for name, tensor in named_tensor_generator:
             serialized_tensor = MultiprocessingSerializer.serialize(
