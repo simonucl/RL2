@@ -14,8 +14,7 @@ from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
-import tempfile
-import os
+import weave
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import (
     prepare_environment_variables,
@@ -24,6 +23,12 @@ from RL2.utils.sglang import (
 )
 from RL2.utils.logging import time_logger, gather_and_log
 
+def _postprocess_generate(x):
+    return {
+        'text': x['text'],
+        'meta_info': {k: v for k, v in x['meta_info'].items() if 'token_logprobs' not in k}
+    }
+    
 class Rollout:
 
     def __init__(self, config):
@@ -106,6 +111,7 @@ class Rollout:
                 except:
                     time.sleep(1)
 
+    @weave.op(postprocess_output=_postprocess_generate)
     async def async_generate(self, states, sampling_params):
         
         payload = {
@@ -125,6 +131,7 @@ class Rollout:
                 except:
                     await asyncio.sleep(1)
         
+    @weave.op(postprocess_output=lambda x: x[1])
     async def rollout(self, data, train):
 
         def initialize_state_dict(state_text):
