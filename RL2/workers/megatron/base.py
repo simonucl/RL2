@@ -35,7 +35,7 @@ class MegatronWorker(Worker):
         super().__init__(config, train)
         
         config = AutoConfig.from_pretrained(config.model_name)
-        self.bridge = AutoBridge.from_config(config)
+        self.bridge = AutoBridge.from_config(config) # TODO (P0): support Qwen3-Next
         tf_config = (
             OmegaConf.to_container(self.config.tf_config)
             if hasattr(self.config, "tf_config") else {}
@@ -67,7 +67,6 @@ class MegatronWorker(Worker):
 
             optimizer_config = OmegaConf.to_container(self.config.optimizer)
             optimizer_config = OptimizerConfig(
-                min_lr=0.0,
                 bf16=True,
                 params_dtype=torch.bfloat16,
                 use_distributed_optimizer=True,
@@ -84,21 +83,19 @@ class MegatronWorker(Worker):
         num_training_steps = total_steps * getattr(
             self.config, "update_per_rollout", 1
         )
-        lr_warmup_steps = int(self.config.warmup_ratio * num_training_steps)
+        scheduler_config = OmegaConf.to_container(self.config.scheduler)
+        lr_warmup_steps = int(
+            scheduler_config.pop("warmup_ratio") * num_training_steps
+        )
         lr_decay_steps = num_training_steps - lr_warmup_steps
-
         self.scheduler = OptimizerParamScheduler(
             self.optimizer,
-            init_lr=0.0,
             max_lr=self.config.optimizer.lr,
-            min_lr=0.0,
+            min_lr=self.config.optimizer.min_lr,
             lr_warmup_steps=lr_warmup_steps,
             lr_decay_steps=lr_decay_steps,
-            lr_decay_style=self.config.scheduler,
-            start_wd=self.config.optimizer.weight_decay,
-            end_wd=self.config.optimizer.weight_decay,
-            wd_incr_steps=0,
-            wd_incr_style="constant"
+            wd_incr_steps=num_training_steps,
+            **scheduler_config
         )
 
     def scatter_data(
