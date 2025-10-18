@@ -5,10 +5,14 @@ import socket
 import requests
 import multiprocessing
 import torch.distributed as dist
-from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang_router.launch_router import RouterArgs, launch_router
+
+try:
+    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+except: # older version of SGLang
+    from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
 def get_host():
 
