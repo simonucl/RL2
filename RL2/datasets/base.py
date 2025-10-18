@@ -54,7 +54,7 @@ class BaseDataset(Dataset):
         self.config = config
         self.tokenizer = tokenizer
         
-        # TODO (P1): support concatnating multiple datasets
+        # TODO: support concatnating multiple datasets
         if not config.path:
             self.dataset = [{} for _ in range(config.prompts_per_rollout)] # for Gym like environments
         else:

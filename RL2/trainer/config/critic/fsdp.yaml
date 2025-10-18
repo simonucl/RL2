@@ -8,11 +8,11 @@ optimizer:
   lr: 5e-6
   weight_decay: 1e-2
 max_grad_norm: 1.0
-scheduler: cosine
-warmup_ratio: 0.1
+scheduler:
+  name: constant
+  warmup_ratio: 0.1
 offload_optimizer: true
 use_lora: false
-
 lora:
   r: 16
   lora_alpha: 32
