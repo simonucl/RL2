@@ -10,6 +10,7 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict
 )
+from peft.utils import get_peft_model_state_dict as get_peft_state_dict
 from transformers import get_scheduler
 from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
@@ -226,43 +227,22 @@ class FSDPWorker(Worker):
             checkpoint_id=f"{save_dir}/optimizer_scheduler"
         )
 
-    def save_model(self, save_dir):
-
+    def save_lora(self, save_dir):
         if dist.get_rank() == 0:
-            self.tokenizer.save_pretrained(save_dir)
-
-        # Handle LoRA models differently
-        if hasattr(self.model.module, 'peft_config'):
-            # For LoRA models, save adapters and base model separately
-            state_dict = self.get_model_state_dict(full_state_dict=True)
-
-            if dist.get_rank() == 0:
-                # Save LoRA adapters
-                self.model.module.save_pretrained(
-                    f"{save_dir}/lora_adapters"
-                )
-                # Save base model weights
-                base_model = self.model.module.get_base_model()
-                base_model.save_pretrained(
-                    save_dir, state_dict=self._extract_base_layer_weights(state_dict)
-                )
-        else:
-            # For non-LoRA models, save normally
-            state_dict = self.get_model_state_dict(full_state_dict=True)
-            if dist.get_rank() == 0:
-                self.model.module.save_pretrained(
-                    save_dir, state_dict=state_dict
-                )
-
+            self.load_model_to_device(torch.cuda.current_device())
+            self.model.save_pretrained(save_dir)
+            self.load_model_to_device("cpu")
         dist.barrier()
 
-    def _extract_base_layer_weights(self, state_dict):
-        """Extract base model weights from LoRA state dict."""
-        clean_dict = {}
-        for name, tensor in state_dict.items():
-            if '.base_layer.weight' in name:
-                clean_name = name.replace('.base_layer.weight', '.weight')
-                clean_dict[clean_name] = tensor
-            elif '.weight' in name and 'lora_' not in name and 'base_layer' not in name:
-                clean_dict[name] = tensor
-        return clean_dict
+    def save_model(self, save_dir):
+
+        if self.config.use_lora:
+            self.save_lora(save_dir)
+        else:
+            state_dict = self.get_model_state_dict(full_state_dict=True)
+            if dist.get_rank() == 0:
+                self.model.module.save_pretrained(save_dir, state_dict=state_dict)
+        
+        if dist.get_rank() == 0:
+            self.tokenizer.save_pretrained(save_dir)
+        dist.barrier()

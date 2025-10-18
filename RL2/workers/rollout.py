@@ -276,36 +276,8 @@ class Rollout:
 
         return None, None
     
-    def _update_lora_on_server(self, state_dict):
-        """Update LoRA adapters on SGLang server using state_dict (LoRA weights)."""
-        if not self.lora_enabled:
-            return
-
-        if self.device_mesh["tp"].get_local_rank() != 0:
-            return
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            lora_save_path = os.path.join(temp_dir, "lora_adapters")
-            os.makedirs(lora_save_path, exist_ok=True)
-            torch.save(state_dict, os.path.join(lora_save_path, "adapter_model.bin"))
-
-            if self.lora_loaded:
-                unload_lora_from_sglang(self.make_request, "default")
-                self.lora_loaded = False
-
-            load_lora_to_sglang(self.make_request, "default", lora_save_path)
-            self.lora_loaded = True
-
-            if dist.get_rank() == 0:
-                print(f"✓ LoRA adapter loaded to SGLang server")
-
     @torch.no_grad()
     def update(self, named_tensor_generator):
-
-        if self.lora_enabled:
-            self._update_lora_on_server(named_tensor_generator)
-            self.make_request("flush_cache", "GET")
-            return
 
         self.make_request("flush_cache", "GET")
         torch.cuda.empty_cache()
@@ -344,3 +316,25 @@ class Rollout:
                 }
                 self.make_request("update_weights_from_tensor", payload=payload)
         self.make_request("flush_cache", "GET")
+
+    @torch.no_grad()
+    def update_lora(self, lora_dir):
+        self.make_request("flush_cache", "GET")
+        torch.cuda.empty_cache()
+        dist.barrier()
+        # or resume_memory_occupation() may OOM
+        self.make_request("resume_memory_occupation")
+
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            payload = {
+                "lora_name": "default"
+            }
+            if self.lora_loaded:
+                self.make_request("unload_lora_adapter", payload=payload)
+                self.lora_loaded = False
+
+            payload["lora_path"] = lora_dir
+            self.make_request("load_lora_adapter", payload=payload)
+            self.lora_loaded = True
+
+        dist.barrier()

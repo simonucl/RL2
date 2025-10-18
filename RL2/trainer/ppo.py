@@ -34,7 +34,7 @@ class PPOTrainer(Trainer):
             self.critic.prepare_scheduler(
                 self.config.trainer.n_epochs * len(self.train_dataloader)
             )
-        self.rollout = initialize_rollout(config.rollout, config.actor)    
+        self.rollout = initialize_rollout(config.rollout)
 
     def get_dataloader(self, train: bool):
 
