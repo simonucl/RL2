@@ -52,7 +52,7 @@ def launch_server_process(server_args):
         enable_memory_saver=True,
         host=get_host(),
         port=get_available_port(),
-        log_level="error",
+        # log_level="error",
         **server_args
     )
     process = multiprocessing.Process(

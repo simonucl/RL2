@@ -228,11 +228,9 @@ class FSDPWorker(Worker):
         )
 
     def save_lora(self, save_dir):
-        if dist.get_rank() == 0:
-            self.load_model_to_device(torch.cuda.current_device())
-            self.model.save_pretrained(save_dir)
-            self.load_model_to_device("cpu")
-        dist.barrier()
+        self.load_model_to_device(torch.cuda.current_device())
+        self.model.save_pretrained(save_dir)
+        self.load_model_to_device("cpu")
 
     def save_model(self, save_dir):
 

@@ -23,19 +23,12 @@ from RL2.utils.sglang import (
     launch_router_process
 )
 from RL2.utils.logging import time_logger, gather_and_log
-from RL2.utils.lora import load_lora_to_sglang, unload_lora_from_sglang
-
 
 class Rollout:
 
-    def __init__(self, config, actor_config=None):
+    def __init__(self, config):
 
         self.config = config
-        self.actor_config = actor_config
-
-        # LoRA configuration from actor
-        self.lora_enabled = actor_config and getattr(actor_config, 'use_lora', False)
-        self.lora_rank = getattr(actor_config.lora, 'r', 64) if self.lora_enabled else 64
         self.lora_loaded = False
 
         self.prepare_device_mesh()
@@ -44,8 +37,6 @@ class Rollout:
             # TODO (P0): serve multiple models
             self.worker_url = launch_server_process(
                 config.server_args,
-                enable_lora=self.lora_enabled,
-                max_lora_rank=self.lora_rank
             )
             worker_urls = [
                 None for _ in range(self.device_mesh["dp"].size())
@@ -332,7 +323,7 @@ class Rollout:
             if self.lora_loaded:
                 self.make_request("unload_lora_adapter", payload=payload)
                 self.lora_loaded = False
-
+            
             payload["lora_path"] = lora_dir
             self.make_request("load_lora_adapter", payload=payload)
             self.lora_loaded = True
