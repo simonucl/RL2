@@ -230,4 +230,4 @@ class FSDPActor(FSDPWorker):
     def update_rollout(self, rollout, step):
 
         state_dict = self.get_model_state_dict(cpu_offload=False)
-        rollout.update(state_dict.items())
+        rollout.update(state_dict.items(), model=self.model.module)

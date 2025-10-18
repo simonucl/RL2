@@ -31,7 +31,7 @@ def initialize_critic(config):
     else:
         raise NotImplementedError
 
-def initialize_rollout(config):
+def initialize_rollout(rollout_config, actor_config=None):
 
     from .rollout import Rollout
-    return Rollout(config)
+    return Rollout(rollout_config, actor_config)

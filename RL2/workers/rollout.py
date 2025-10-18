@@ -21,18 +21,41 @@ from RL2.utils.sglang import (
     launch_router_process
 )
 from RL2.utils.logging import time_logger, gather_and_log
+from RL2.utils.lora import (
+    unload_lora_from_sglang_server,
+    load_lora_to_sglang_server
+)
 
 
 class Rollout:
 
-    def __init__(self, config):
-        
+    def __init__(self, config, actor_config=None):
+
         self.config = config
+        self.actor_config = actor_config
+
+        # Check if LoRA is enabled on the actor
+        self.lora_enabled = False
+        self.lora_rank = 64  # default
+        if actor_config is not None:
+            self.lora_enabled = getattr(actor_config, 'use_lora', False)
+            if self.lora_enabled:
+                lora_config = getattr(actor_config, 'lora', None)
+                if lora_config:
+                    self.lora_rank = getattr(lora_config, 'r', 64)
+
+        self.lora_name = "rl2_actor_lora"
+        self.lora_loaded = False
+
         self.prepare_device_mesh()
         prepare_environment_variables(self.device_mesh["tp"].get_group())
         if self.device_mesh["tp"].get_local_rank() == 0:
             # TODO (P0): serve multiple models
-            self.worker_url = launch_server_process(config.server_args)
+            self.worker_url = launch_server_process(
+                config.server_args,
+                enable_lora=self.lora_enabled,
+                max_lora_rank=self.lora_rank
+            )
             worker_urls = [
                 None for _ in range(self.device_mesh["dp"].size())
             ] if self.device_mesh["dp"].get_local_rank() == 0 else None
@@ -262,15 +285,52 @@ class Rollout:
 
         return None, None
     
+    def _update_lora_on_server(self, model):
+        """Update LoRA adapters on SGLang server."""
+        if not self.lora_enabled:
+            return
+
+        if self.device_mesh["tp"].get_local_rank() != 0:
+            return
+
+        import tempfile
+        import os
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lora_save_path = os.path.join(temp_dir, "lora_adapters")
+            os.makedirs(lora_save_path, exist_ok=True)
+
+            if hasattr(model, 'peft_config'):
+                model.save_pretrained(lora_save_path)
+
+                if self.lora_loaded:
+                    unload_lora_from_sglang_server(self.worker_url, self.lora_name)
+                    self.lora_loaded = False
+
+                success = load_lora_to_sglang_server(
+                    self.worker_url,
+                    self.lora_name,
+                    lora_save_path
+                )
+                self.lora_loaded = success
+
+                if dist.get_rank() == 0 and success:
+                    print(f"✓ LoRA adapter '{self.lora_name}' loaded to SGLang server")
+
     @torch.no_grad()
-    def update(self, named_tensor_generator):
+    def update(self, named_tensor_generator, model=None):
 
         self.make_request("flush_cache", "GET")
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
         self.make_request("resume_memory_occupation")
-        
+
+        if self.lora_enabled and model is not None:
+            self._update_lora_on_server(model)
+            self.make_request("flush_cache", "GET")
+            return
+
         for name, tensor in named_tensor_generator:
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor

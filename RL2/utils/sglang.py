@@ -45,16 +45,26 @@ def prepare_environment_variables(process_group):
     )
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
 
-def launch_server_process(server_args):
+def launch_server_process(server_args, enable_lora=False, max_lora_rank=64):
 
     server_args = OmegaConf.to_container(server_args)
-    server_args = ServerArgs(
-        enable_memory_saver=True,
-        host=get_host(),
-        port=get_available_port(),
-        log_level="error",
+
+    # Build server kwargs
+    server_kwargs = {
+        'enable_memory_saver': True,
+        'host': get_host(),
+        'port': get_available_port(),
+        'log_level': 'error',
         **server_args
-    )
+    }
+
+    # Add LoRA configuration if enabled
+    if enable_lora:
+        server_kwargs['enable_lora'] = True
+        server_kwargs['max_loras_per_batch'] = 1
+        server_kwargs['max_lora_rank'] = max_lora_rank
+
+    server_args = ServerArgs(**server_kwargs)
     process = multiprocessing.Process(
         target=launch_server, args=(server_args,)
     )
