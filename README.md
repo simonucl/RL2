@@ -5,12 +5,7 @@ A concise library of post-training for large language models.
 This is the right library for you if you want to learn reinforcement learning for large language models or have a quick test for your own algorithm.
 We deliver a clear implementation without complicated abstractions.
 
-Despite the simplicity, you should be able to scale up to moderate-sized, *e.g.*, 72B, language models with
-
-* Training engine partition via [Fully Sharded Data Parallelism](https://docs.pytorch.org/docs/stable/fsdp.html) and [Tensor Parallelism](https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html)
-* Sequence partition via [ZigZag Context Parallelism](https://github.com/zhuzilin/ring-flash-attention)
-* Inference engine and KV cache partition via Tensor Parallelism
-
+Despite the simplicity, you should be able to scale up with 3D (DP/CP/TP) parallelism in FSDP backend and 5D parallelism (DP/CP/PP/TP/EP) in Megatron backend.
 We also support
 
 * Balanced sequence packing for higher throughput
@@ -213,7 +208,7 @@ This project is built upon the basis of many remarkable projects, including but 
 * [RingFlashAttention](https://github.com/zhuzilin/ring-flash-attention) for the support of ZigZag context parallelism
 * [SGLang](https://github.com/sgl-project/sglang) for the support of async inference engine
 
-We also thank [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF) and [veRL](https://github.com/volcengine/verl) for their pioneering work.
+We also thank [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF), [veRL](https://github.com/volcengine/verl), and [slime](https://github.com/THUDM/slime) for their pioneering work.
 
 ## Citation
 If you find this library useful, please cite in the following format
