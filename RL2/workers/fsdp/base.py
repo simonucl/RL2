@@ -7,7 +7,8 @@ from torch.distributed.fsdp._runtime_utils import _lazy_init
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
-    get_model_state_dict
+    get_model_state_dict,
+    set_model_state_dict
 )
 from transformers import get_scheduler
 from RL2.workers import Worker
@@ -53,6 +54,46 @@ class FSDPWorker(Worker):
 
         if self.train and self.config.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
+
+        # Apply LoRA before tensor parallelism and data parallelism
+        use_lora = getattr(self.config, 'use_lora', False)
+        if use_lora and self.train:
+            lora_config = getattr(self.config, 'lora', None)
+            if not lora_config:
+                raise ValueError("use_lora is True but lora config is missing")
+            if self.config.tp_size > 1:
+                raise NotImplementedError(
+                    "LoRA is currently incompatible with Tensor Parallelism (tp_size > 1). "
+                    "This is due to PyTorch DTensor not supporting PEFT LoRA modules. "
+                    "Please use tp_size=1 with LoRA, or use FSDP/DDP for parallelism."
+                )
+            if lora_config.r < 1:
+                raise ValueError(f"LoRA rank must be >= 1, got {lora_config.r}")
+
+            from peft import LoraConfig, get_peft_model, TaskType
+
+            # Determine task type based on model architecture
+            if hasattr(self.model, 'lm_head'):
+                task_type = TaskType.CAUSAL_LM
+            elif hasattr(self.model, 'score'):
+                task_type = TaskType.SEQ_CLS
+            else:
+                task_type = TaskType.CAUSAL_LM
+
+            peft_config = LoraConfig(
+                task_type=task_type,
+                r=lora_config.r,
+                lora_alpha=lora_config.lora_alpha,
+                lora_dropout=lora_config.lora_dropout,
+                target_modules=list(lora_config.target_modules),
+                bias="none",
+                use_rslora=getattr(lora_config, 'use_rslora', False),
+                modules_to_save=getattr(lora_config, 'modules_to_save', None)
+            )
+            self.model = get_peft_model(self.model, peft_config)
+
+            if dist.get_rank() == 0:
+                self.model.print_trainable_parameters()
 
         if self.config.tp_size > 1:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
@@ -187,12 +228,41 @@ class FSDPWorker(Worker):
 
     def save_model(self, save_dir):
 
-        state_dict = self.get_model_state_dict(full_state_dict=True)
         if dist.get_rank() == 0:
-
             self.tokenizer.save_pretrained(save_dir)
-            self.model.module.save_pretrained(
-                save_dir, state_dict=state_dict
-            )
+
+        # Handle LoRA models differently
+        if hasattr(self.model.module, 'peft_config'):
+            # For LoRA models, save adapters and base model separately
+            state_dict = self.get_model_state_dict(full_state_dict=True)
+
+            if dist.get_rank() == 0:
+                # Save LoRA adapters
+                self.model.module.save_pretrained(
+                    f"{save_dir}/lora_adapters"
+                )
+                # Save base model weights
+                base_model = self.model.module.get_base_model()
+                base_model.save_pretrained(
+                    save_dir, state_dict=self._extract_base_layer_weights(state_dict)
+                )
+        else:
+            # For non-LoRA models, save normally
+            state_dict = self.get_model_state_dict(full_state_dict=True)
+            if dist.get_rank() == 0:
+                self.model.module.save_pretrained(
+                    save_dir, state_dict=state_dict
+                )
 
         dist.barrier()
+
+    def _extract_base_layer_weights(self, state_dict):
+        """Extract base model weights from LoRA state dict."""
+        clean_dict = {}
+        for name, tensor in state_dict.items():
+            if '.base_layer.weight' in name:
+                clean_name = name.replace('.base_layer.weight', '.weight')
+                clean_dict[clean_name] = tensor
+            elif '.weight' in name and 'lora_' not in name and 'base_layer' not in name:
+                clean_dict[name] = tensor
+        return clean_dict
