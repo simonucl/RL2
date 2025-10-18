@@ -14,6 +14,8 @@ from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
+import tempfile
+import os
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import (
     prepare_environment_variables,
@@ -21,10 +23,7 @@ from RL2.utils.sglang import (
     launch_router_process
 )
 from RL2.utils.logging import time_logger, gather_and_log
-from RL2.utils.lora import (
-    unload_lora_from_sglang_server,
-    load_lora_to_sglang_server
-)
+from RL2.utils.lora import load_lora_to_sglang, unload_lora_from_sglang, save_lora_adapters
 
 
 class Rollout:
@@ -34,17 +33,9 @@ class Rollout:
         self.config = config
         self.actor_config = actor_config
 
-        # Check if LoRA is enabled on the actor
-        self.lora_enabled = False
-        self.lora_rank = 64  # default
-        if actor_config is not None:
-            self.lora_enabled = getattr(actor_config, 'use_lora', False)
-            if self.lora_enabled:
-                lora_config = getattr(actor_config, 'lora', None)
-                if lora_config:
-                    self.lora_rank = getattr(lora_config, 'r', 64)
-
-        self.lora_name = "rl2_actor_lora"
+        # LoRA configuration from actor
+        self.lora_enabled = actor_config and getattr(actor_config, 'use_lora', False)
+        self.lora_rank = getattr(actor_config.lora, 'r', 64) if self.lora_enabled else 64
         self.lora_loaded = False
 
         self.prepare_device_mesh()
@@ -293,29 +284,18 @@ class Rollout:
         if self.device_mesh["tp"].get_local_rank() != 0:
             return
 
-        import tempfile
-        import os
-
         with tempfile.TemporaryDirectory() as temp_dir:
-            lora_save_path = os.path.join(temp_dir, "lora_adapters")
-            os.makedirs(lora_save_path, exist_ok=True)
+            save_lora_adapters(model, temp_dir)
 
-            if hasattr(model, 'peft_config'):
-                model.save_pretrained(lora_save_path)
+            if self.lora_loaded:
+                unload_lora_from_sglang(self.make_request, "actor_lora")
+                self.lora_loaded = False
 
-                if self.lora_loaded:
-                    unload_lora_from_sglang_server(self.worker_url, self.lora_name)
-                    self.lora_loaded = False
+            load_lora_to_sglang(self.make_request, "actor_lora", temp_dir)
+            self.lora_loaded = True
 
-                success = load_lora_to_sglang_server(
-                    self.worker_url,
-                    self.lora_name,
-                    lora_save_path
-                )
-                self.lora_loaded = success
-
-                if dist.get_rank() == 0 and success:
-                    print(f"✓ LoRA adapter '{self.lora_name}' loaded to SGLang server")
+            if dist.get_rank() == 0:
+                print(f"✓ LoRA adapter 'actor_lora' loaded to SGLang server")
 
     @torch.no_grad()
     def update(self, named_tensor_generator, model=None):

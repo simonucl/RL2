@@ -7,81 +7,70 @@ and unloading them.
 """
 
 import os
-import requests
 import torch
-import torch.distributed as dist
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable
 
 
-def save_lora_adapters(model, save_dir: str, rank: int = 0):
+def save_lora_adapters(model, save_dir: str, rank: int = 0) -> Optional[str]:
+    """
+    Save LoRA adapters from a PEFT model to a directory.
+
+    Args:
+        model: The PEFT model with LoRA adapters
+        save_dir: Directory to save the LoRA adapters
+        rank: Process rank (only rank 0 saves)
+
+    Returns:
+        Path to saved LoRA adapters if rank==0, None otherwise
+    """
     if rank != 0:
         return None
 
+    # Check if model has PEFT config (LoRA enabled)
     if not hasattr(model, 'peft_config'):
         return None
 
     lora_save_path = os.path.join(save_dir, "lora_adapters")
     os.makedirs(lora_save_path, exist_ok=True)
 
+    # Save LoRA adapters using PEFT's save_pretrained
     model.save_pretrained(lora_save_path)
 
     return lora_save_path
 
 
-def load_lora_to_sglang_server(
-    worker_url: str,
+def load_lora_to_sglang(
+    make_request: Callable,
     lora_name: str,
-    lora_path: str,
-    max_retries: int = 3
-) -> bool:
+    lora_path: str
+) -> None:
+    """
+    Load LoRA adapter to SGLang server via HTTP API.
+
+    Args:
+        make_request: Function to make HTTP requests (from Rollout.make_request)
+        lora_name: Name to assign to this LoRA adapter
+        lora_path: Path to the LoRA adapter directory
+    """
     payload = {
         "lora_name": lora_name,
         "lora_path": lora_path
     }
-
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                f"{worker_url}/load_lora_adapter",
-                json=payload,
-                timeout=30
-            )
-            response.raise_for_status()
-            return True
-        except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
-                print(f"Failed to load LoRA adapter after {max_retries} attempts: {e}")
-                return False
-            import time
-            time.sleep(1)
-
-    return False
+    make_request("load_lora_adapter", payload=payload)
 
 
-def unload_lora_from_sglang_server(
-    worker_url: str,
-    lora_name: str,
-    max_retries: int = 3
-) -> bool:
+def unload_lora_from_sglang(
+    make_request: Callable,
+    lora_name: str
+) -> None:
+    """
+    Unload LoRA adapter from SGLang server via HTTP API.
+
+    Args:
+        make_request: Function to make HTTP requests (from Rollout.make_request)
+        lora_name: Name of the LoRA adapter to unload
+    """
     payload = {
         "lora_name": lora_name
     }
-
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                f"{worker_url}/unload_lora_adapter",
-                json=payload,
-                timeout=30
-            )
-            response.raise_for_status()
-            return True
-        except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
-                # It's okay if unload fails (e.g., adapter not loaded)
-                print(f"Note: Failed to unload LoRA adapter (may not be loaded): {e}")
-                return False
-            import time
-            time.sleep(1)
-
-    return False
+    make_request("unload_lora_adapter", payload=payload)
