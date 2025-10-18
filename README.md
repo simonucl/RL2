@@ -27,7 +27,7 @@ Also check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenT
 
 ## Incoming Features
 
-- [ ] Support Megatron backend to increase GPU utilization for Mixture-of-Expert
+- [X] Support Megatron backend to increase GPU utilization for Mixture-of-Expert
 - [ ] Support Low-Rank Adaptation to decrease GPU memory comsumption
 - [X] Initialize model on meta device to decrease RAM consumption
 - [ ] Support partial rollout to decrease GPU idle
