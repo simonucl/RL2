@@ -235,13 +235,13 @@ class Rollout(Worker):
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            gather_and_log(metrics, step, self.device_mesh["dp"])
+            gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
             if not train:
                 return
 
             all_tensor_dicts = gather_and_concat_list(
-                all_tensor_dicts, self.device_mesh["dp"]
+                all_tensor_dicts, self.device_mesh["dp"].get_group()
             )
 
             if dist.get_rank() == 0:
@@ -282,7 +282,7 @@ class Rollout(Worker):
         if self.lora_enabled:
             # LoRA update path
             if self.device_mesh["tp"].get_local_rank() == 0:
-                # Convert generator to dict
+                # Convert generator to dict (LoRA state is small, safe to load all)
                 state_dict = dict(named_tensor_generator)
 
                 # Save LoRA adapters to disk
@@ -296,6 +296,10 @@ class Rollout(Worker):
 
                     # Save state_dict (LoRA weights only from PEFT model)
                     torch.save(state_dict, os.path.join(lora_save_path, "adapter_model.bin"))
+
+                    # Delete state_dict to free memory
+                    del state_dict
+                    torch.cuda.empty_cache()
 
                     # Unload old LoRA if loaded
                     if self.lora_loaded:
@@ -319,17 +323,15 @@ class Rollout(Worker):
             return
 
         # Regular weight update path (non-LoRA)
-        torch.cuda.empty_cache()
         dist.barrier()
-        # or llm.resume_memory_occupation() may OOM
+        # Resume memory BEFORE loading tensors to GPU
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.llm.resume_memory_occupation()
 
-        # Convert to list to get length
-        state_dict_items = list(named_tensor_generator)
-
-        for idx, (name, tensor) in enumerate(state_dict_items):
-            tensor = tensor.to(torch.cuda.current_device())
+        # Don't convert to list - process one tensor at a time to save memory
+        tensor_count = 0
+        for name, tensor in named_tensor_generator:
+            # Keep tensor on CPU, only serialize
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )
@@ -342,11 +344,26 @@ class Rollout(Worker):
                 group_dst=0,
                 group=self.device_mesh["tp"].get_group(),
             )
+
+            # Delete to free memory immediately
+            del tensor
+            del serialized_tensor
+
+            tensor_count += 1
+
             if self.device_mesh["tp"].get_local_rank() == 0:
+                # Engine will handle GPU loading internally
                 self.llm.update_weights_from_tensor(
                     named_tensors=[(
                         name, LocalSerializedTensor(values=serialized_tensors)
                     )],
-                    flush_cache=(idx == len(state_dict_items) - 1)
+                    flush_cache=False  # Don't flush until the end
                 )
+                del serialized_tensors
+
+        # Flush cache after all updates
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            self.llm.flush_cache()
+
+        torch.cuda.empty_cache()
         dist.barrier()
