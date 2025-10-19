@@ -208,7 +208,7 @@ class Rollout(Worker):
         if self.device_mesh["tp"].get_local_rank() == 0:
 
             data_list = split_and_scatter_list(
-                data_list, self.device_mesh["dp"]
+                data_list, process_group=self.device_mesh["dp"]
             )
             loop = asyncio.get_event_loop()
             outputs = loop.run_until_complete(
