@@ -204,7 +204,11 @@ class Rollout:
 
         if dist.get_rank() == 0:
 
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             outputs = loop.run_until_complete(
                 tqdm.gather(
                     *(self.rollout(data, train) for data in data_list),
