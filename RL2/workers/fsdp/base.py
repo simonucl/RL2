@@ -229,7 +229,7 @@ class FSDPWorker(Worker):
 
     def save_lora(self, save_dir):
         self.load_model_to_device(torch.cuda.current_device())
-        self.model.save_pretrained(save_dir)
+        self.model.save_pretrained(save_dir, is_main_process=dist.get_rank() == 0)
         self.load_model_to_device("cpu")
 
     def save_model(self, save_dir):
