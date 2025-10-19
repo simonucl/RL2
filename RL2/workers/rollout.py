@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
 from sglang.srt.entrypoints.engine import Engine
-from sglang.srt.patch_torch import monkey_patch_torch_reductions
+from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
@@ -17,12 +17,15 @@ import wandb
 import weave
 from RL2.workers import Worker
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
-from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
+from RL2.utils.communication import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
 
 def postprocess_output(response):
     tensor_dicts, metrics, last_response = response
-    return metrics, last_response
+    return {
+        **metrics,
+        "response": last_response
+    }
 
 class Rollout(Worker):
 
@@ -52,9 +55,8 @@ class Rollout(Worker):
                 "model_path": config.model_name,
                 "dtype": config.dtype,
                 "tp_size": self.device_mesh["tp"].size(),
-                "mem_fraction_static": config.gpu_memory_utilization,
+                "mem_fraction_static": config.mem_fraction_static,
                 "enable_memory_saver": True,
-                "port": config.base_port + dist.get_rank(),
             }
 
             if hasattr(config, 'context_length') and config.context_length:
@@ -192,7 +194,7 @@ class Rollout(Worker):
 
         metric["n_turns"].append(turn)
         metric["scores"].append(sum(scores))
-        last_response = self.tokenizer.decode(state_dict["states"][-1])
+        last_response = self.tokenizer.decode(state_dict["states"])
 
         return tensor_dicts, metric, last_response
 
@@ -274,7 +276,6 @@ class Rollout(Worker):
 
         return None, None
 
-    @time_logger("update_rollout")
     @torch.no_grad()
     def update(self, named_tensor_generator):
 
