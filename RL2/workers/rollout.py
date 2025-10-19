@@ -1,84 +1,111 @@
 from omegaconf import OmegaConf
-import time
+import os
 import base64
 import asyncio
-import aiohttp
-import requests
 import importlib
 from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
+from sglang.srt.entrypoints.engine import Engine
+from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
 import weave
+from RL2.workers import Worker
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
-from RL2.utils.sglang import (
-    prepare_environment_variables,
-    launch_server_process,
-    launch_router_process
-)
+from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
 
-def _postprocess_generate(x):
-    return {
-        'text': x['text'],
-        'meta_info': {k: v for k, v in x['meta_info'].items() if 'token_logprobs' not in k}
-    }
-    
-class Rollout:
+def postprocess_output(response):
+    tensor_dicts, metrics, last_response = response
+    return metrics, last_response
 
-    def __init__(self, config):
+class Rollout(Worker):
+
+    def __init__(self, config, actor_config=None):
 
         self.config = config
+        self.actor_config = actor_config
+        self.train = None
+
+        # LoRA configuration from actor
+        self.lora_enabled = actor_config and getattr(actor_config, 'use_lora', False)
+        self.lora_rank = getattr(actor_config.lora, 'r', 64) if self.lora_enabled else 64
         self.lora_loaded = False
 
         self.prepare_device_mesh()
-        prepare_environment_variables(self.device_mesh["tp"].get_group())
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            config.model_name, trust_remote_code=True
+        )
+
+        self.prepare_environment_variables()
         if self.device_mesh["tp"].get_local_rank() == 0:
-            # TODO (P0): serve multiple models
-            self.worker_url = launch_server_process(
-                config.server_args,
-            )
-            worker_urls = [
-                None for _ in range(self.device_mesh["dp"].size())
-            ] if self.device_mesh["dp"].get_local_rank() == 0 else None
-            dist.gather_object(
-                self.worker_url,
-                worker_urls,
-                group_dst=0,
-                group=self.device_mesh["dp"].get_group(),
-            )
-        
-        if dist.get_rank() == 0:
-
             self.prepare_environment()
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                config.server_args.model_path, trust_remote_code=True
-            )
-            self.router_url = launch_router_process(worker_urls)
 
-            self.train_sampling_params = OmegaConf.to_container(
-                config.train_sampling_params
-            )
-            self.test_sampling_params = OmegaConf.to_container(
-                config.test_sampling_params
-            )
+            os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
+
+            engine_kwargs = {
+                "model_path": config.model_name,
+                "dtype": config.dtype,
+                "tp_size": self.device_mesh["tp"].size(),
+                "mem_fraction_static": config.gpu_memory_utilization,
+                "enable_memory_saver": True,
+                "port": config.base_port + dist.get_rank(),
+            }
+
+            if hasattr(config, 'context_length') and config.context_length:
+                engine_kwargs['context_length'] = config.context_length
+
+            if self.lora_enabled:
+                engine_kwargs['enable_lora'] = True
+                engine_kwargs['max_loras_per_batch'] = 1
+                engine_kwargs['max_lora_rank'] = self.lora_rank
+                if dist.get_rank() == 0:
+                    print(f"[LoRA Init] Launching SGLang Engine with LoRA support (max_rank={self.lora_rank})")
+
+            self.llm = Engine(**engine_kwargs)
+
+        self.train_sampling_params = OmegaConf.to_container(
+            config.train_sampling_params
+        )
+        self.test_sampling_params = OmegaConf.to_container(
+            config.test_sampling_params
+        )
 
     def prepare_device_mesh(self):
 
         world_size = dist.get_world_size()
-        assert world_size % self.config.server_args.tp_size == 0, \
-            f"World_size {world_size} must be divisible by tp_size {self.config.server_args.tp_size}."
-        self.dp_size = world_size // self.config.server_args.tp_size
+        assert world_size % self.config.tp_size == 0, \
+            f"World_size {world_size} must be divisible by tp_size {self.config.tp_size}."
+        self.dp_size = world_size // self.config.tp_size
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cpu",
             mesh_dim_names=("dp", "tp"),
-            mesh_shape=(self.dp_size, self.config.server_args.tp_size)
+            mesh_shape=(self.dp_size, self.config.tp_size)
         )
+
+    def prepare_environment_variables(self):
+
+        if "TORCHELASTIC_USE_AGENT_STORE" in os.environ.keys():
+            del os.environ["TORCHELASTIC_USE_AGENT_STORE"]
+        monkey_patch_torch_reductions()
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        if cuda_visible_devices:
+            cuda_visible_devices = cuda_visible_devices.split(",")
+            cuda_visible_device = cuda_visible_devices[int(os.environ["LOCAL_RANK"])]
+        else:
+            cuda_visible_device = os.environ["LOCAL_RANK"]
+        cuda_visible_devices = self.device_mesh["tp"].size() * [None]
+        dist.all_gather_object(
+            cuda_visible_devices,
+            cuda_visible_device,
+            self.device_mesh["tp"].get_group(),
+        )
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
 
     def prepare_environment(self):
 
@@ -88,90 +115,47 @@ class Rollout:
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
-    def make_request(self, endpoint, method="POST", payload=None):
+    def initialize_state_dict(self, state_text):
 
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            while True:
-                try:
-                    if method == "POST":
-                        response = requests.post(
-                            f"{self.worker_url}/{endpoint}",
-                            json=payload or {}
-                        )
-                    elif method == "GET":
-                        response = requests.get(
-                            f"{self.worker_url}/{endpoint}"
-                        )
-                    else:
-                        raise NotImplementedError
-                    response.raise_for_status()
-                    return
-                except NotImplementedError:
-                    raise
-                except:
-                    time.sleep(1)
-
-    @weave.op(postprocess_output=_postprocess_generate)
-    async def async_generate(self, states, sampling_params):
-        
-        payload = {
-            "input_ids": states,
-            "sampling_params": sampling_params,
-            "return_logprob": True
+        states = self.tokenizer.encode(state_text, add_special_tokens=False)
+        return {
+            "states": states,
+            "actions": len(states) * [0],
+            "action_mask": len(states) * [0],
+            "logps": len(states) * [0],
+            "rewards": len(states) * [0]
         }
 
-        async with aiohttp.ClientSession() as session:
-            while True:
-                try:
-                    async with session.post(
-                        f"{self.router_url}/generate",
-                        json=payload
-                    ) as response:
-                        return await response.json(content_type=None)
-                except:
-                    await asyncio.sleep(1)
-        
-    @weave.op(postprocess_output=lambda x: x[1])
-    async def rollout(self, data, train):
+    def get_tensor_dict(self, state_dict):
 
-        def initialize_state_dict(state_text):
-            states = self.tokenizer.encode(state_text, add_special_tokens=False)
-            return {
-                "states": states,
-                "actions": len(states) * [0],
-                "action_mask": len(states) * [0],
-                "logps": len(states) * [0],
-                "rewards": len(states) * [0]
-            }
+        tensor_dict = get_tensor_dict(
+            state_dict["states"],
+            state_dict["actions"],
+            state_dict["action_mask"]
+        )
+        tensor_dict["llm_logps"] = torch.FloatTensor(state_dict["logps"][1:])
+        tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
+        return tensor_dict
 
-        def state_dict_to_tensor_dict(state_dict):
+    @weave.op(postprocess_output=postprocess_output)
+    async def rollout(self, ex, train):
 
-            tensor_dict = get_tensor_dict(
-                state_dict["states"],
-                state_dict["actions"],
-                state_dict["action_mask"]
-            )
-            tensor_dict["llm_logps"] = torch.FloatTensor(state_dict["logps"][1:])
-            tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
-            return tensor_dict
-
-        if "prompt" in data:
-            state_text = data["prompt"]
-        else:
-            state_text, data["extra_info"] = await self.env.reset(
-                data["extra_info"]
-            )
-        state_dict = initialize_state_dict(state_text)
-        env_response = {"extra_info": data["extra_info"]}
+        state_text = (
+            ex["prompt"] if "prompt" in ex else
+            await self.env.reset(ex["extra_info"])
+        )
+        state_dict = self.initialize_state_dict(state_text)
+        env_response = {"extra_info": ex["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
         scores = []
         for turn in range(1, self.config.max_turns + 1):
 
-            llm_response = await self.async_generate(
-                state_dict["states"],
-                self.train_sampling_params
-                if train else self.test_sampling_params
+            llm_response = await self.llm.async_generate(
+                input_ids=state_dict["states"],
+                sampling_params=self.train_sampling_params
+                if train else self.test_sampling_params,
+                return_logprob=True
             )
 
             action_text = llm_response["text"]
@@ -193,97 +177,158 @@ class Rollout:
             scores.append(env_response["score"])
 
             if turn == self.config.max_turns or env_response["done"]:
-                tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
+                tensor_dicts.append(self.get_tensor_dict(state_dict))
                 break
             if env_response["next_state"].startswith(state_text + action_text):
-                state_dict_delta = initialize_state_dict(
+                state_dict_delta = self.initialize_state_dict(
                     env_response["next_state"][len(state_text + action_text):]
                 )
                 for k, v in state_dict_delta.items():
                     state_dict[k].extend(v)
             else:
-                tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
-                state_dict = initialize_state_dict(env_response["next_state"])
+                tensor_dicts.append(self.get_tensor_dict(state_dict))
+                state_dict = self.initialize_state_dict(env_response["next_state"])
             state_text = env_response["next_state"]
 
         metric["n_turns"].append(turn)
         metric["scores"].append(sum(scores))
+        last_response = self.tokenizer.decode(state_dict["states"][-1])
 
-        return tensor_dicts, metric
+        return tensor_dicts, metric, last_response
 
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
 
-        if dist.get_rank() == 0:
+        # The data is distributed from rank 0 before each worker operation
+        # and gathered before the next operation, which facilitates to do
+        # model-agnostic operations, e.g., computing advantages, globally
+        # and guarantees the load balancing across all model computations.
+        if self.device_mesh["tp"].get_local_rank() == 0:
 
+            data_list = split_and_scatter_list(
+                data_list, self.device_mesh["dp"]
+            )
             loop = asyncio.get_event_loop()
             outputs = loop.run_until_complete(
                 tqdm.gather(
-                    *(self.rollout(data, train) for data in data_list),
+                    *(self.rollout(ex, train) for ex in data_list),
                     desc="Rollout",
                     position=1,
                     leave=False,
                     disable=(dist.get_rank() != 0)
                 )
             )
+            if train:
+                # If test, llm will soon be called again. See `Trainer.train`.
+                self.llm.release_memory_occupation()
 
-            all_tensor_dicts, metrics = map(list, zip(*outputs))
+        dist.barrier()
+
+        if self.device_mesh["tp"].get_local_rank() == 0:
+
+            all_tensor_dicts, metrics, _ = map(list, zip(*outputs))
+
             suffix = "train" if train else "test"
             metrics = {
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            gather_and_log(metrics, step)
+            gather_and_log(metrics, step, self.device_mesh["dp"])
 
-        dist.barrier()
+            if not train:
+                return
 
-        if not train:
-            return
-
-        self.make_request("release_memory_occupation")
-
-        if dist.get_rank() == 0:
-
-            group_size = self.config.responses_per_prompt
-            if group_size > 1 and self.config.dynamic_filtering:
-
-                rewards = torch.FloatTensor([
-                    sum([td["rewards"].sum().item() for td in tensor_dicts])
-                    for tensor_dicts in all_tensor_dicts
-                ]).view(-1, group_size)
-                are_filtered = rewards.std(-1) == 0
-                all_tensor_dicts = sum([
-                    all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
-                    for idx, is_filtered in enumerate(are_filtered)
-                    if not is_filtered
-                ], [])
-                wandb.log({
-                    "dynamic_filtering_ratio": are_filtered.float().mean().item()
-                }, step=step)
-
-            tensor_dicts = sum(all_tensor_dicts, [])
-            tensor_dict = pack_tensor_dicts(tensor_dicts)
-            seqs = torch.LongTensor([
-                len(tensor_dicts) for tensor_dicts in all_tensor_dicts
-            ])
-            cu_seqs = torch.cumsum(
-                torch.cat((torch.LongTensor([0]), seqs)), dim=0
+            all_tensor_dicts = gather_and_concat_list(
+                all_tensor_dicts, self.device_mesh["dp"]
             )
-            
-            return tensor_dict, cu_seqs
+
+            if dist.get_rank() == 0:
+
+                group_size = self.config.responses_per_prompt
+                if group_size > 1 and self.config.dynamic_filtering:
+
+                    rewards = torch.FloatTensor([
+                        sum([td["rewards"].sum().item() for td in tensor_dicts])
+                        for tensor_dicts in all_tensor_dicts
+                    ]).view(-1, group_size)
+                    are_filtered = rewards.std(-1) == 0
+                    all_tensor_dicts = sum([
+                        all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
+                        for idx, is_filtered in enumerate(are_filtered)
+                        if not is_filtered
+                    ], [])
+                    wandb.log({
+                        "dynamic_filtering_ratio": are_filtered.float().mean().item()
+                    }, step=step)
+
+                tensor_dicts = sum(all_tensor_dicts, [])
+                tensor_dict = pack_tensor_dicts(tensor_dicts)
+                seqs = torch.LongTensor([
+                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts
+                ])
+                cu_seqs = torch.cumsum(
+                    torch.cat((torch.LongTensor([0]), seqs)), dim=0
+                )
+
+                return tensor_dict, cu_seqs
 
         return None, None
-    
+
+    @time_logger("update_rollout")
     @torch.no_grad()
     def update(self, named_tensor_generator):
 
-        self.make_request("flush_cache", "GET")
+        if self.lora_enabled:
+            # LoRA update path
+            if self.device_mesh["tp"].get_local_rank() == 0:
+                # Convert generator to dict
+                state_dict = dict(named_tensor_generator)
+
+                # Save LoRA adapters to disk
+                import tempfile
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    lora_save_path = os.path.join(temp_dir, "lora_adapters")
+                    os.makedirs(lora_save_path, exist_ok=True)
+
+                    if dist.get_rank() == 0:
+                        print(f"[LoRA Update] Saving LoRA state dict to {lora_save_path}")
+
+                    # Save state_dict (LoRA weights only from PEFT model)
+                    torch.save(state_dict, os.path.join(lora_save_path, "adapter_model.bin"))
+
+                    # Unload old LoRA if loaded
+                    if self.lora_loaded:
+                        if dist.get_rank() == 0:
+                            print("[LoRA Update] Unloading previous LoRA adapter...")
+                        self.llm.unload_lora_adapter(lora_name="default")
+                        self.lora_loaded = False
+
+                    # Load new LoRA
+                    if dist.get_rank() == 0:
+                        print(f"[LoRA Update] Loading new LoRA adapter from {lora_save_path}...")
+                    self.llm.load_lora_adapter(lora_name="default", lora_path=lora_save_path)
+                    self.lora_loaded = True
+
+                    if dist.get_rank() == 0:
+                        print("[LoRA Update] ✓ LoRA adapter loaded successfully")
+
+                    self.llm.flush_cache()
+
+            dist.barrier()
+            return
+
+        # Regular weight update path (non-LoRA)
         torch.cuda.empty_cache()
         dist.barrier()
-        # or resume_memory_occupation() may OOM
-        self.make_request("resume_memory_occupation")
+        # or llm.resume_memory_occupation() may OOM
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            self.llm.resume_memory_occupation()
 
-        for name, tensor in named_tensor_generator:
+        # Convert to list to get length
+        state_dict_items = list(named_tensor_generator)
+
+        for idx, (name, tensor) in enumerate(state_dict_items):
+            tensor = tensor.to(torch.cuda.current_device())
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )
@@ -297,42 +342,10 @@ class Rollout:
                 group=self.device_mesh["tp"].get_group(),
             )
             if self.device_mesh["tp"].get_local_rank() == 0:
-                named_tensors = [
-                    (name, LocalSerializedTensor(values=serialized_tensors))
-                ]
-                serialized_named_tensors = [
-                    MultiprocessingSerializer.serialize(named_tensors)
-                    for _ in range(self.device_mesh["tp"].size())
-                ]
-                serialized_named_tensors = [
-                    base64.b64encode(snt).decode("utf-8")
-                    for snt in serialized_named_tensors
-                ]
-                payload = {
-                    "serialized_named_tensors": serialized_named_tensors,
-                    "flush_cache": False
-                }
-                self.make_request("update_weights_from_tensor", payload=payload)
-        self.make_request("flush_cache", "GET")
-
-    @torch.no_grad()
-    def update_lora(self, lora_dir):
-        self.make_request("flush_cache", "GET")
-        torch.cuda.empty_cache()
-        dist.barrier()
-        # or resume_memory_occupation() may OOM
-        self.make_request("resume_memory_occupation")
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            payload = {
-                "lora_name": "default"
-            }
-            if self.lora_loaded:
-                self.make_request("unload_lora_adapter", payload=payload)
-                self.lora_loaded = False
-            
-            payload["lora_path"] = lora_dir
-            self.make_request("load_lora_adapter", payload=payload)
-            self.lora_loaded = True
-
+                self.llm.update_weights_from_tensor(
+                    named_tensors=[(
+                        name, LocalSerializedTensor(values=serialized_tensors)
+                    )],
+                    flush_cache=(idx == len(state_dict_items) - 1)
+                )
         dist.barrier()
