@@ -210,16 +210,33 @@ class Rollout(Worker):
             data_list = split_and_scatter_list(
                 data_list, process_group=self.device_mesh["dp"]
             )
-            loop = asyncio.get_event_loop()
-            outputs = loop.run_until_complete(
-                tqdm.gather(
-                    *(self.rollout(ex, train) for ex in data_list),
-                    desc="Rollout",
-                    position=1,
-                    leave=False,
-                    disable=(dist.get_rank() != 0)
+
+            # Use asyncio.run() instead of get_event_loop() for Python 3.10+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is None:
+                outputs = asyncio.run(
+                    tqdm.gather(
+                        *(self.rollout(ex, train) for ex in data_list),
+                        desc="Rollout",
+                        position=1,
+                        leave=False,
+                        disable=(dist.get_rank() != 0)
+                    )
                 )
-            )
+            else:
+                outputs = loop.run_until_complete(
+                    tqdm.gather(
+                        *(self.rollout(ex, train) for ex in data_list),
+                        desc="Rollout",
+                        position=1,
+                        leave=False,
+                        disable=(dist.get_rank() != 0)
+                    )
+                )
             if train:
                 # If test, llm will soon be called again. See `Trainer.train`.
                 self.llm.release_memory_occupation()
