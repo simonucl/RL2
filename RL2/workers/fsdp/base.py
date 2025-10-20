@@ -56,45 +56,24 @@ class FSDPWorker(Worker):
         if self.train and self.config.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        # Apply LoRA before tensor parallelism and data parallelism
-        use_lora = getattr(self.config, 'use_lora', False)
-        if use_lora and self.train:
-            lora_config = getattr(self.config, 'lora', None)
-            if not lora_config:
-                raise ValueError("use_lora is True but lora config is missing")
+        use_lora = self.config.use_lora
+        if use_lora:
             if self.config.tp_size > 1:
-                raise NotImplementedError(
-                    "LoRA is currently incompatible with Tensor Parallelism (tp_size > 1). "
-                    "This is due to PyTorch DTensor not supporting PEFT LoRA modules. "
-                    "Please use tp_size=1 with LoRA, or use FSDP/DDP for parallelism."
-                )
-            if lora_config.r < 1:
-                raise ValueError(f"LoRA rank must be >= 1, got {lora_config.r}")
-
+                raise ValueError("Tensor parallelism is not supported with LoRA.")
             from peft import LoraConfig, get_peft_model, TaskType
-
-            # Determine task type based on model architecture
             if hasattr(self.model, 'lm_head'):
                 task_type = TaskType.CAUSAL_LM
             elif hasattr(self.model, 'score'):
                 task_type = TaskType.SEQ_CLS
             else:
-                task_type = TaskType.CAUSAL_LM
+                raise ValueError("Model has no LM head or score attribute.")
 
-            peft_config = LoraConfig(
-                task_type=task_type,
-                r=lora_config.r,
-                lora_alpha=lora_config.lora_alpha,
-                lora_dropout=lora_config.lora_dropout,
-                target_modules=list(lora_config.target_modules),
-                bias="none",
-                use_rslora=getattr(lora_config, 'use_rslora', False),
-                modules_to_save=getattr(lora_config, 'modules_to_save', None)
+            lora_config = OmegaConf.to_container(self.config.lora)
+            lora_config = LoraConfig(
+                **lora_config,
+                task_type=task_type
             )
-            self.model = get_peft_model(self.model, peft_config)
-
-            if dist.get_rank() == 0:
-                self.model.print_trainable_parameters()
+            self.model = get_peft_model(self.model, lora_config)
 
         if self.config.tp_size > 1:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
@@ -239,8 +218,11 @@ class FSDPWorker(Worker):
         else:
             state_dict = self.get_model_state_dict(full_state_dict=True)
             if dist.get_rank() == 0:
-                self.model.module.save_pretrained(save_dir, state_dict=state_dict)
-        
+                self.model.module.save_pretrained(
+                    save_dir, state_dict=state_dict
+                )
+
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
+
         dist.barrier()

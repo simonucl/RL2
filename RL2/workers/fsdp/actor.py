@@ -230,10 +230,9 @@ class FSDPActor(FSDPWorker):
     def update_rollout(self, rollout, step):
 
         if self.config.use_lora:
-            lora_dir = "lora_adapters"
+            lora_dir = f"lora_{self.config.lora.r}"
             self.save_lora(lora_dir)
             rollout.update_lora(lora_dir)
         else:
             state_dict = self.get_model_state_dict(cpu_offload=False)
             rollout.update(state_dict.items())
-            self.load_model_to_device("cpu")

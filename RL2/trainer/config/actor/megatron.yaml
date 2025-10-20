@@ -36,3 +36,4 @@ lora:
     - gate_proj
     - up_proj
     - down_proj
+  modules_to_save: null

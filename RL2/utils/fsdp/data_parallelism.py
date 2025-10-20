@@ -17,9 +17,7 @@ def prepare_dp_model(model, device_mesh):
             if module.__class__.__name__ == name:
                 return module.__class__
 
-    # Get base model if it's a PEFT model
     base_model = model.get_base_model() if hasattr(model, 'peft_config') else model
-
     transformer_layer_cls = {
         get_module_cls_from_name(name)
         for name in base_model._no_split_modules
@@ -47,5 +45,5 @@ def prepare_dp_model(model, device_mesh):
         sync_module_states=device_mesh["tp"].size() == 1,
         device_mesh=device_mesh["ddp", "fsdp"],
         device_id=torch.cuda.current_device(),
-        use_orig_params=use_orig_params
+        use_orig_params=hasattr(model, 'peft_config')
     )
