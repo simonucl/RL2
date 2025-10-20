@@ -13,10 +13,11 @@ torchrun \
     actor.cp_size=2 \
     actor.max_length_per_device=8192 \
     actor.avg_level=sequence \
-    kl.type=loss \
-    kl.loss_estimator=k3 \
+    actor.kl.type=loss \
+    actor.kl.loss_estimator=k3 \
     adv.estimator=reinforce \
     adv.norm_var=true \
+    +actor.track_tis=true \
     rollout.train_sampling_params.max_new_tokens=8192 \
     rollout.env_path=envs/orz.py \
     trainer.project=OpenReasonerZero \

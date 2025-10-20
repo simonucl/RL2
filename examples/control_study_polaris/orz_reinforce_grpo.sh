@@ -12,6 +12,7 @@ torchrun \
     actor.model_name=Qwen/Qwen3-4B-Base \
     actor.cp_size=2 \
     actor.max_length_per_device=8192 \
+    +actor.track_tis=true \
     rollout.train_sampling_params.max_new_tokens=8192 \
     rollout.env_path=envs/orz.py \
     adv.estimator=reinforce \

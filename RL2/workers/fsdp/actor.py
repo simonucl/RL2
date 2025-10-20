@@ -185,12 +185,46 @@ class FSDPActor(FSDPWorker):
                 losses = - torch.min(objective, clipped_objective)
                 clip_ratios = objective > clipped_objective
 
+                tis = None
                 if self.config.tis_coef > 0:
                     # https://fengyao.notion.site/off-policy-rl
+                    logps = minibatch["logps"]
                     tis = torch.exp(
-                        minibatch["logps"].detach() - minibatch["llm_logps"]
+                        logps.detach() - minibatch["llm_logps"]
                     ).clamp(max=self.config.tis_coef)
                     losses *= tis
+
+                # Track TIS metrics if enabled (independent of tis_coef)
+                if getattr(self.config, 'track_tis', False):
+                    logps = minibatch["logps"]
+                    tis_raw = logps.detach() - minibatch["llm_logps"]
+                    tis_raw_v2 = 0.5 * (tis_raw ** 2)
+                    tis_raw_mean = aggregate_values(
+                        tis_raw,
+                        minibatch["action_mask"],
+                        self.config.avg_level,
+                        total_actions,
+                        total_sequences
+                    )
+                    tis_raw_v2_mean = aggregate_values(
+                        tis_raw_v2,
+                        minibatch["action_mask"],
+                        self.config.avg_level,
+                        total_actions,
+                        total_sequences
+                    )
+                    metric["actor/tis_raw_mean"].append(tis_raw_mean.item())
+                    metric["actor/tis_raw_v2_mean"].append(tis_raw_v2_mean.item())
+                    
+                    if self.config.tis_coef > 0 and tis is not None:
+                        tis_clamped_mean = aggregate_values(
+                            tis,
+                            minibatch["action_mask"],
+                            self.config.avg_level,
+                            total_actions,
+                            total_sequences
+                        )
+                        metric["actor/tis_clamped_mean"].append(tis_clamped_mean.item())
                     
                 loss, clip_ratio, entropy = aggregate_values(
                     (losses, clip_ratios, minibatch["entropy"]),
