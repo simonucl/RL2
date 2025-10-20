@@ -34,10 +34,6 @@ class Trainer:
                     name=config.trainer.experiment_name,
                     config=OmegaConf.to_container(config)
                 )
-                weave.init(
-                    project=config.trainer.project,
-                    settings={"print_call_link": False}
-                )
             else:
                 wandb.log = lambda *args, **kwargs: None
 
