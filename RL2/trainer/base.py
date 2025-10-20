@@ -3,6 +3,7 @@ import glob
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import wandb
+import weave
 
 class Trainer:
     
@@ -32,6 +33,10 @@ class Trainer:
                     project=config.trainer.project,
                     name=config.trainer.experiment_name,
                     config=OmegaConf.to_container(config)
+                )
+                weave.init(
+                    project=config.trainer.project,
+                    settings={"print_call_link": False}
                 )
             else:
                 wandb.log = lambda *args, **kwargs: None

@@ -12,9 +12,11 @@ from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
+from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 from tqdm.asyncio import tqdm
 import wandb
 import weave
+import gc
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import (
     prepare_environment_variables,
@@ -306,7 +308,7 @@ class Rollout:
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
-        self.make_request("resume_memory_occupation")
+        self.make_request("resume_memory_occupation", payload={"tags": [GPU_MEMORY_TYPE_WEIGHTS]})
 
         for name, tensor in named_tensor_generator:
             serialized_tensor = MultiprocessingSerializer.serialize(
@@ -338,6 +340,12 @@ class Rollout:
                     "flush_cache": False
                 }
                 self.make_request("update_weights_from_tensor", payload=payload)
+
+        del named_tensor_generator
+        gc.collect()
+        torch.cuda.empty_cache()
+        dist.barrier()
+        self.make_request("resume_memory_occupation", payload={"tags": [GPU_MEMORY_TYPE_KV_CACHE]})
         self.make_request("flush_cache", "GET")
 
     @torch.no_grad()

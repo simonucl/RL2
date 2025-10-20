@@ -39,7 +39,7 @@ rollout:
     model_path: ${actor.model_name}
     dtype: bfloat16
     tp_size: 1
-    mem_fraction_static: 0.6
+    mem_fraction_static: 0.5
     enable_lora: ${actor.use_lora}
     max_lora_rank: ${actor.lora.r}
     lora_target_modules: ${actor.lora.target_modules}
