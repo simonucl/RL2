@@ -5,7 +5,7 @@ sleep 3
 torchrun \
     --nproc_per_node=8 \
     -m RL2.trainer.ppo \
-    train_data.path=Chenmien/OpenReasonerZero \
+    train_data.path=simonycl/Polaris-Dataset-53K \
     train_data.prompts_per_rollout=64 \
     train_data.responses_per_prompt=8 \
     test_data.path=Chenmien/OlympiadBench \
@@ -16,7 +16,7 @@ torchrun \
     rollout.env_path=envs/orz.py \
     adv.estimator=reinforce \
     trainer.project=OpenReasonerZero \
-    trainer.experiment_name=qwen3-4b-base-reinforce \
+    trainer.experiment_name=qwen3-4b-dr-grpo-polaris \
     trainer.test_freq=8 \
     trainer.save_freq=32 \
     trainer.load_ckpt_from=latest
