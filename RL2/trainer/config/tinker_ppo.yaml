@@ -1,0 +1,73 @@
+defaults:
+- ppo  # Inherit from RL2's ppo.yaml
+- _self_
+
+# Override: Tinker doesn't need actor/critic configs
+actor: null
+ref_actor: null
+critic: null
+
+# Tinker-specific settings
+tinker:
+  base_url: null  # Tinker service URL (null for local)
+  model_name: Qwen/Qwen3-8B-Base
+  lora_rank: 32
+  max_tokens: 2048
+  learning_rate: 4e-5
+
+  # Async performance settings
+  enable_async_overlap: true  # Enable generation/training overlap for ~1.8x speedup
+  loss_fn: importance_sampling  # 'importance_sampling' or 'ppo'
+
+  # KL penalty (similar to RL2's actor.kl.coef)
+  kl_penalty_coef: 0.0  # Penalty for divergence from reference model (set > 0 to enable)
+  use_ref_model: false  # If true, load separate reference model for KL
+
+# Reuse RL2 configs
+train_data:
+  path: null
+  prompts_per_rollout: 128
+  responses_per_prompt: 1
+
+test_data:
+  path: null
+  prompts_per_rollout: null
+  responses_per_prompt: 1
+
+# Rollout settings (adapted for Tinker)
+rollout:
+  env_module: null  # Path to environment module (e.g., RL2/envs/orz.py for math_verify)
+  train_sampling_params:
+    temperature: 1.0
+    max_new_tokens: ${tinker.max_tokens}
+    stop: null
+  test_sampling_params:
+    temperature: 0.0
+    max_new_tokens: ${tinker.max_tokens}
+    stop: null
+
+# Advantage computation (matches RL2's logic)
+adv:
+  estimator: reinforce  # 'reinforce' or 'gae'
+  gamma: 1.0  # Discount factor (1.0 for bandit, <1.0 for multi-turn)
+  lamda: 1.0
+  responses_per_prompt: ${train_data.responses_per_prompt}  # Group size for GRPO
+
+  # Normalization modes (matches RL2/RL2/utils/algorithms.py:compute_reinforce_adv)
+  # global_norm=False (GRPO default): Center within groups (per prompt)
+  #   advantages = rewards - mean(rewards_per_prompt)
+  # global_norm=True (ReBN): Center across entire batch
+  #   advantages = rewards - mean(all_rewards)
+  global_norm: false  # False=GRPO (per-prompt), True=ReBN (global)
+  norm_var: false     # If true: divide by std, if false: just subtract mean
+
+# Trainer settings (reuse RL2's)
+trainer:
+  project: null
+  experiment_name: tinker_ppo_${now:%Y%m%d_%H%M%S}
+  load_ckpt_from: null
+  n_epochs: 1
+  test_freq: null
+  save_dir: ckpts/${trainer.experiment_name}
+  save_freq: 20  # Save every N steps
+  use_wandb: true

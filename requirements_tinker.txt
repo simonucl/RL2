@@ -1,0 +1,5 @@
+# Tinker backend dependencies for RL2
+# Install with: pip install -r requirements_tinker.txt
+
+tinker>=0.1.0
+tinker-cookbook>=0.1.0
