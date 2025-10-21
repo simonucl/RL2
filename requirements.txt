@@ -7,7 +7,7 @@ transformers
 wandb
 flash-attn
 torchdata
-sglang[all]
+sglang[all]==0.5.1.post3
 sglang_router
 peft
 math_verify
