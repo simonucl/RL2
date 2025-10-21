@@ -37,14 +37,25 @@ test_data:
 # Rollout settings (adapted for Tinker)
 rollout:
   env_module: null  # Path to environment module (e.g., RL2/envs/orz.py for math_verify)
+  use_engine: false
+  server_args:
+    model_path: ${tinker.model_name}  # Override actor.model_name reference
+    dtype: bfloat16
+    tp_size: 1
+    mem_fraction_static: 0.5
+    enable_lora: false
+    max_lora_rank: ${tinker.lora_rank}
+    lora_target_modules: null
   train_sampling_params:
     temperature: 1.0
     max_new_tokens: ${tinker.max_tokens}
     stop: null
+    no_stop_trim: true
   test_sampling_params:
     temperature: 0.0
     max_new_tokens: ${tinker.max_tokens}
     stop: null
+    no_stop_trim: true
 
 # Advantage computation (matches RL2's logic)
 adv:

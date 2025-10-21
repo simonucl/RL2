@@ -16,9 +16,6 @@ if [ ! -f math_train.jsonl ]; then
     python examples/prepare_math_data.py
 fi
 
-export TINKER_API_KEY=""
-export WANDB_API_KEY=""
-
 # Run RL2-Tinker training
 python -m RL2.trainer.tinker_ppo \
     tinker.model_name="Qwen/Qwen3-8B-Base" \
@@ -32,7 +29,7 @@ python -m RL2.trainer.tinker_ppo \
     train_data.prompts_per_rollout=64 \
     train_data.responses_per_prompt=16 \
     test_data.path=math_test.jsonl \
-    rollout.env_module=RL2/envs/orz.py \
+    rollout.env_module=envs/orz.py \
     rollout.train_sampling_params.temperature=1.0 \
     adv.responses_per_prompt=16 \
     adv.global_norm=false \
@@ -41,5 +38,5 @@ python -m RL2.trainer.tinker_ppo \
     trainer.use_wandb=true \
     trainer.save_freq=20 \
     trainer.test_freq=20 \
-    wandb.project="tinker-examples" \
-    wandb.name="math-Qwen3-8B-Base-16group-64batch-1e-4lr-4096tokens-rl2"
+    trainer.project="tinker-examples" \
+    trainer.experiment_name="math-Qwen3-8B-Base-16group-64batch-1e-4lr-4096tokens-rl2"

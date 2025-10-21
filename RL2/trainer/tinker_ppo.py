@@ -7,8 +7,9 @@ import hydra
 import numpy as np
 import torch
 import wandb
-from tqdm import tqdm
-
+from omegaconf import OmegaConf
+from tqdm.asyncio import tqdm
+from transformers import AutoTokenizer
 import tinker
 from tinker.types import SamplingParams, ModelInput, Datum, AdamParams
 from tinker.types.tensor_data import TensorData
@@ -32,7 +33,22 @@ class TinkerPPOTrainer(Trainer):
     """
 
     def __init__(self, config):
-        super().__init__(config)  # RL2's base: wandb, checkpointing, config handling
+        self.config = config
+
+        print(OmegaConf.to_yaml(config))
+        if config.trainer.use_wandb:
+            wandb.init(
+                project=config.trainer.project,
+                name=config.trainer.experiment_name,
+                config=OmegaConf.to_container(config)
+            )
+        else:
+            wandb.log = lambda *args, **kwargs: None
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.tinker.model_name,
+            trust_remote_code=True
+        )
 
         self.train_dataloader = self.get_dataloader(True)
         self.test_dataloader = self.get_dataloader(False) if config.test_data.path else None
@@ -42,9 +58,6 @@ class TinkerPPOTrainer(Trainer):
         self.service_client = None
         self.current_sampling_client = None
 
-        # Tokenizer (will be set in setup_tinker)
-        self.tokenizer = None
-
         # Environment module (for reward computation)
         self.env_module = None
 
@@ -52,7 +65,7 @@ class TinkerPPOTrainer(Trainer):
         """Reuse RL2's dataset loading"""
         dataset = RLDataset(
             self.config.train_data if train else self.config.test_data,
-            tokenizer=None  # Will use Tinker's tokenizer
+            self.tokenizer
         )
         return get_dataloader(
             dataset,
@@ -70,13 +83,6 @@ class TinkerPPOTrainer(Trainer):
         self.training_client = await self.service_client.create_lora_training_client_async(
             base_model=self.config.tinker.model_name,
             rank=self.config.tinker.lora_rank
-        )
-
-        # Get tokenizer from Tinker
-        from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.tinker.model_name,
-            trust_remote_code=True
         )
 
         # Load environment module if configured (like RL2's env_path)
@@ -163,7 +169,11 @@ class TinkerPPOTrainer(Trainer):
             }
 
         # Run all samples concurrently
-        episodes = await asyncio.gather(*[sample_one(data) for data in data_list])
+        episodes = await tqdm.gather(
+            *[sample_one(data) for data in data_list],
+            desc="Rollout",
+            leave=False
+        )
         return episodes
 
     def compute_advantages_from_rewards(self, rewards: List[float]) -> List[float]:
@@ -292,9 +302,6 @@ class TinkerPPOTrainer(Trainer):
         base_rewards = [ep['reward'] for ep in episodes]
 
         metrics = {
-            # Loss
-            'train/loss': fwd_bwd_result.metrics.get('loss', 0.0),
-
             # Rewards (after KL penalty if applied)
             'train/reward_mean': np.mean(rewards),
             'train/reward_std': np.std(rewards),
@@ -314,6 +321,10 @@ class TinkerPPOTrainer(Trainer):
             'train/episode_len_std': np.std([len(ep['response_tokens']) for ep in episodes]),
             'train/num_episodes': len(episodes),
         }
+
+        # Expose all metrics from fwd_bwd_result
+        for key, value in fwd_bwd_result.metrics.items():
+            metrics[f'train/{key}'] = value
 
         # Add KL penalty metrics if enabled
         if self.config.tinker.kl_penalty_coef > 0 and ref_logprobs is not None:
@@ -448,7 +459,7 @@ class TinkerPPOTrainer(Trainer):
 
 
 @hydra.main(config_path="config", config_name="tinker_ppo", version_base=None)
-async def main(config):
+def main(config):
     """
     Entry point for Tinker-based RL2 training.
 
@@ -457,11 +468,15 @@ async def main(config):
             train_data.path=prompts.jsonl \\
             tinker.model_name=Qwen/Qwen3-8B-Base
     """
-    # No need for initialize_global_process_group - Tinker handles distributed training!
+    asyncio.run(async_main(config))
 
+
+async def async_main(config):
+    """Async training logic."""
+    # No need for initialize_global_process_group - Tinker handles distributed training!
     trainer = TinkerPPOTrainer(config)
     await trainer.train()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
