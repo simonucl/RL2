@@ -33,5 +33,8 @@ def initialize_critic(config):
 
 def initialize_rollout(rollout_config):
 
-    from .rollout import Rollout
+    if rollout_config.use_engine:
+        from .rollout_engine import RolloutEngine as Rollout
+    else:
+        from .rollout import Rollout
     return Rollout(rollout_config)

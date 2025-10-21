@@ -1,11 +1,5 @@
 from omegaconf import OmegaConf
-import time
-import base64
 import asyncio
-import aiohttp
-import requests
-import importlib
-from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
@@ -19,11 +13,9 @@ import wandb
 import weave
 import gc
 import os
-from RL2.datasets import get_tensor_dict, pack_tensor_dicts
+from RL2.datasets import pack_tensor_dicts
 from RL2.utils.sglang import (
     prepare_environment_variables,
-    launch_server_process,
-    launch_router_process
 )
 from RL2.utils.logging import time_logger, gather_and_log
 from RL2.workers.rollout import Rollout

@@ -36,6 +36,7 @@ actor:
     coef: 0.0
 
 rollout:
+  use_engine: false
   server_args:
     model_path: ${actor.model_name}
     dtype: bfloat16
