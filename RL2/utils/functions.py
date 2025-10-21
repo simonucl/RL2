@@ -91,12 +91,12 @@ def compute_logps_and_entropy(
         process_group
     )
     key = f"{prefix}_logps" if prefix else "logps"
-    minibatch[key] = (action_logits - logsumexp) * minibatch["action_mask"]
+    minibatch[key] = (action_logits - logsumexp) * minibatch["action_mask"].float()
 
     if return_entropy:
         minibatch["entropy"] = compute_entropy(
             logits, logsumexp, process_group
-        ) * minibatch["action_mask"]
+        ) * minibatch["action_mask"].float()
 
 def aggregate_values(
     tensor,
@@ -123,7 +123,7 @@ def aggregate_values(
     elif avg_level == "sequence":
         return (
             tensor.sum(-1) / (
-                action_mask.sum(-1) + torch.finfo(tensor.dtype).eps
+                action_mask.float().sum(-1) + torch.finfo(tensor.dtype if tensor.dtype != torch.bool else torch.float32).eps
             )
         ).sum() / total_sequences
     else:

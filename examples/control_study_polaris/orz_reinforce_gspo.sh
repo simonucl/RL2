@@ -1,5 +1,6 @@
 export WEAVE_PRINT_CALL_LINK=false
 pkill -9 -f "RL2.trainer.ppo"
+pkill -9 -f "sglang"
 sleep 3
 
 torchrun \
@@ -17,7 +18,6 @@ torchrun \
     actor.kl.loss_estimator=k3 \
     adv.estimator=reinforce \
     adv.norm_var=true \
-    +actor.track_tis=true \
     rollout.train_sampling_params.max_new_tokens=8192 \
     rollout.env_path=envs/orz.py \
     trainer.project=OpenReasonerZero \
