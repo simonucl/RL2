@@ -235,7 +235,10 @@ class FSDPActor(FSDPWorker):
                     mean_log_ratios = sum_log_ratios / seq_lengths
                     seq_ratios = torch.exp(mean_log_ratios)
 
-                    seq_advantages = advantages[:, 0]
+                    # To get the last non-zero in dimension 1, use masked indexing with action_mask:
+                    # This gets the index of the last non-masked ("active") token for each sequence
+                    last_indices = (action_mask.sum(dim=1) - 1).long().clamp(min=0)
+                    seq_advantages = advantages[torch.arange(advantages.size(0)), last_indices]
                     clipped_seq_ratios = torch.clamp(
                         seq_ratios, 1 - self.config.clip, 1 + self.config.clip
                     )
