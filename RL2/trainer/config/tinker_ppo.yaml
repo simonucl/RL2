@@ -27,7 +27,7 @@ tinker:
 train_data:
   path: null
   prompts_per_rollout: 128
-  responses_per_prompt: 1
+  responses_per_prompt: 64
 
 test_data:
   path: null
@@ -51,7 +51,6 @@ adv:
   estimator: reinforce  # 'reinforce' or 'gae'
   gamma: 1.0  # Discount factor (1.0 for bandit, <1.0 for multi-turn)
   lamda: 1.0
-  responses_per_prompt: ${train_data.responses_per_prompt}  # Group size for GRPO
 
   # Normalization modes (matches RL2/RL2/utils/algorithms.py:compute_reinforce_adv)
   # global_norm=False (GRPO default): Center within groups (per prompt)

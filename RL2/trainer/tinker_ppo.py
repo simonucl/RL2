@@ -179,7 +179,7 @@ class TinkerPPOTrainer(Trainer):
           advantages = rewards - mean(all_rewards)
         """
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
-        responses_per_prompt = self.config.adv.responses_per_prompt
+        responses_per_prompt = self.config.train_data.responses_per_prompt
 
         # Reshape to [num_prompts, responses_per_prompt]
         rewards_reshaped = rewards_tensor.view(-1, responses_per_prompt)
