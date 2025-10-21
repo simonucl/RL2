@@ -62,7 +62,7 @@ class RolloutEngine(Rollout):
 
         dist.barrier()
 
-    # @weave.op(postprocess_output=_postprocess_generate)
+    @weave.op(postprocess_output=_postprocess_generate)
     async def async_generate(self, states, sampling_params):
         return await self.llm.async_generate(
             input_ids=states,
