@@ -62,9 +62,9 @@ class RolloutEngine(Rollout):
 
         dist.barrier()
 
-    @weave.op(postprocess_output=_postprocess_generate)
+    # @weave.op(postprocess_output=_postprocess_generate)
     async def async_generate(self, states, sampling_params):
-        return self.llm.async_generate(
+        return await self.llm.async_generate(
             input_ids=states,
             sampling_params=sampling_params,
             return_logprob=True
@@ -82,7 +82,11 @@ class RolloutEngine(Rollout):
             data_list = split_and_scatter_list(
                 data_list, self.device_mesh["dp"]
             )
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             outputs = loop.run_until_complete(
                 tqdm.gather(
                     *(self.rollout(ex, train) for ex in data_list),
@@ -100,14 +104,14 @@ class RolloutEngine(Rollout):
 
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            all_tensor_dicts, metrics, _ = map(list, zip(*outputs))
+            all_tensor_dicts, metrics = map(list, zip(*outputs))
 
             suffix = "train" if train else "test"
             metrics = {
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            gather_and_log(metrics, step, self.device_mesh["dp"])
+            gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
             if not train:
                 return
