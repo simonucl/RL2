@@ -14,14 +14,13 @@ torchrun \
     actor.cp_size=2 \
     actor.max_length_per_device=8192 \
     actor.avg_level=sequence \
-    actor.kl.type=loss \
-    actor.kl.loss_estimator=k3 \
+    actor.loss_type=gspo \
     adv.estimator=reinforce \
     adv.norm_var=true \
     rollout.train_sampling_params.max_new_tokens=8192 \
     rollout.env_path=envs/orz.py \
     trainer.project=OpenReasonerZero \
-    trainer.experiment_name=qwen3-4b-base-grpo-polaris \
+    trainer.experiment_name=qwen3-4b-base-gspo-polaris \
     trainer.test_freq=8 \
     trainer.save_freq=32 \
     trainer.load_ckpt_from=latest

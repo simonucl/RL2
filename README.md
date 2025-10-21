@@ -198,8 +198,11 @@ The length of any sequence cannot exceed `sp_size * tp_size * max_length_per_dev
 
 The default algorithm is [Dr. GRPO](https://arxiv.org/abs/2503.20783), where the loss is averaged at the token level and the advantage is not divided by the standard deviation.
 
+* To use Dr. GRPO, set `actor.avg_level=token`, `kl.loss_estimator=k2`, and `adv.estimator=reinforce` and `adv.norm_var=false`
 * To use OpenAI PPO, set `kl.type=reward`, `kl.reward_estimator=k1`, and `adv.estimator=gae`
 * To use DeepSeek GRPO, set `actor.avg_level=sequence`, `kl.type=loss`, `kl.loss_estimator=k3`, and `adv.norm_var=true`
+* To use GSPO, set `actor.loss_type=gspo`, `actor.avg_level=seqeunce`, `adv.norm_var=true`
+* To use CISPO, set `actor.loss_type=cispo`, `actor.avg_level=token`, `adv.norm_var=true`
 
 ## Acknowledgement
 
