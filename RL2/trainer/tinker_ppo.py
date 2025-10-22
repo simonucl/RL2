@@ -2,7 +2,7 @@ import asyncio
 from collections import deque
 from typing import List, Dict, Any
 import logging
-
+import weave
 import hydra
 import numpy as np
 import torch
@@ -106,7 +106,7 @@ class TinkerPPOTrainer(Trainer):
         """Tokenize a prompt string"""
         return self.tokenizer.encode(prompt, add_special_tokens=False)
 
-    async def compute_reward(self, data: Dict[str, Any], response_tokens: List[int]) -> float:
+    async def compute_reward(self, data: Dict[str, Any], response_text: str) -> float:
         """
         Compute reward for a response using environment step function.
 
@@ -120,8 +120,6 @@ class TinkerPPOTrainer(Trainer):
                 "rollout.env_module must be configured. "
                 "Set rollout.env_module to path of environment file (e.g., RL2/envs/orz.py)"
             )
-
-        response_text = self.tokenizer.decode(response_tokens)
 
         # Call environment step function (like RL2/envs/orz.py)
         result = await self.env_module.step(
@@ -141,6 +139,7 @@ class TinkerPPOTrainer(Trainer):
             temperature=self.config.rollout.train_sampling_params.temperature
         )
 
+        @weave.op()
         async def sample_one(data):
             """Sample a single episode"""
             prompt = data['prompt']
@@ -155,14 +154,15 @@ class TinkerPPOTrainer(Trainer):
 
             response_tokens = result.sequences[0].tokens
             logprobs = result.sequences[0].logprobs
-
+            response_text = self.tokenizer.decode(response_tokens)
             # Get reward
-            reward = await self.compute_reward(data, response_tokens)
+            reward = await self.compute_reward(data, response_text)
 
             return {
                 'prompt': prompt,
                 'prompt_tokens': prompt_tokens,
                 'response_tokens': response_tokens,
+                'response_text': response_text,
                 'logprobs': logprobs,
                 'reward': reward,  # Base reward (will apply KL penalty later)
                 'extra_info': data.get('extra_info', {}),
