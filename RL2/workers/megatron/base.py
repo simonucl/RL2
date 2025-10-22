@@ -10,6 +10,7 @@ from megatron.core import (
     tensor_parallel,
     dist_checkpointing
 )
+from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
@@ -126,12 +127,16 @@ class MegatronWorker(Worker):
             return
 
         for model in self.model:
-            for buffers in [model.buffers, model.expert_parallel_buffers]:
-                for buffer in buffers:
-                    if buffer.param_data.storage().size() > 0:
-                        buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
-                        buffer.param_data_size = buffer.param_data.storage().size()
-                        buffer.param_data.storage().resize_(0)
+            if isinstance(model, DDP):
+                for buffers in [model.buffers, model.expert_parallel_buffers]:
+                    for buffer in buffers:
+                        if buffer.param_data.storage().size() > 0:
+                            buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
+                            buffer.param_data_size = buffer.param_data.storage().size()
+                            buffer.param_data.storage().resize_(0)
+            else:
+                for _, param in model.named_parameters():
+                    param.data = param.data.to("cpu", non_blocking=True)
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -142,14 +147,21 @@ class MegatronWorker(Worker):
             return
 
         for model in self.model:
-            for buffers in [model.buffers, model.expert_parallel_buffers]:
-                for buffer in buffers:
-                    if buffer.param_data.storage().size() == 0:
-                        buffer.param_data.storage().resize_(buffer.param_data_size)
-                        buffer.param_data.copy_(
-                            buffer.param_data.cpu_data,
-                            non_blocking=True
-                        )
+            if isinstance(model, DDP):
+                for buffers in [model.buffers, model.expert_parallel_buffers]:
+                    for buffer in buffers:
+                        if buffer.param_data.storage().size() == 0:
+                            buffer.param_data.storage().resize_(buffer.param_data_size)
+                            buffer.param_data.copy_(
+                                buffer.param_data.cpu_data,
+                                non_blocking=True
+                            )
+            else:
+                for _, param in model.named_parameters():
+                    param.data = param.data.to(
+                        torch.cuda.current_device(),
+                        non_blocking=True
+                    )
 
         gc.collect()
         torch.cuda.empty_cache()

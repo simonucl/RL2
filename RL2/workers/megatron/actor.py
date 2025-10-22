@@ -20,8 +20,8 @@ class MegatronActor(MegatronWorker):
     
     def __init__(self, config, train: bool):
         super().__init__(config, train)
-        # TODO: wrap_with_ddp=train?
-        self.model = self.bridge.get_model(wrap_with_ddp=True)
+
+        self.model = self.bridge.get_model(wrap_with_ddp=train)
         self.prepare_model_optimizer()
 
     @time_logger("compute_logps")
