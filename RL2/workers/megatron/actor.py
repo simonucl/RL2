@@ -82,7 +82,7 @@ class MegatronActor(MegatronWorker):
                 total_actions,
                 total_sequences
             )
-            return self.scale_loss(loss), 1, {"loss": [loss.item()]}
+            return self.scale_loss(loss), {"loss": [loss.item()]}
 
         metrics, grad_norm = self.forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
@@ -120,7 +120,7 @@ class MegatronActor(MegatronWorker):
                 "loss": [loss.item()],
                 "accuracy": (reward_margins > 0).tolist()
             }
-            return self.scale_loss(loss), 1, metric
+            return self.scale_loss(loss), metric
 
         metrics, grad_norm = self.forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
@@ -200,7 +200,7 @@ class MegatronActor(MegatronWorker):
                     "actor/clip_ratio": [clip_ratio.item()],
                 }
 
-                return self.scale_loss(loss), 1, metric
+                return self.scale_loss(loss), metric
             
             metric, grad_norm = self.forward_backward(f, batch)
             for k, v in metric.items():

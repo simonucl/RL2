@@ -71,7 +71,7 @@ class MegatronCritic(MegatronWorker):
                 "loss": [loss.item()],
                 "accuracy": (reward_margins > 0).tolist()
             }
-            return self.scale_loss(loss), 1, metric
+            return self.scale_loss(loss), metric
 
         metrics, grad_norm = self.forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
@@ -125,7 +125,7 @@ class MegatronCritic(MegatronWorker):
                     "critic/clip_ratio": [clip_ratio.item()]
                 }
 
-                return self.scale_loss(loss), 1, metric
+                return self.scale_loss(loss), metric
 
             metric, grad_norm = self.forward_backward(f, batch)
             for k, v in metric.items():
