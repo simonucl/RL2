@@ -50,9 +50,10 @@ class MegatronWorker(Worker):
     def prepare_device_mesh(self):
 
         if not mpu.is_initialized():
-            # TODO: support vpp
+
             mpu.initialize_model_parallel(
                 pipeline_model_parallel_size=self.config.pp_size,
+                virtual_pipeline_model_parallel_size=self.config.vpp_size,
                 context_parallel_size=self.config.cp_size,
                 tensor_model_parallel_size=self.config.tp_size,
                 expert_model_parallel_size=self.config.ep_size,
@@ -105,6 +106,9 @@ class MegatronWorker(Worker):
         pack_minibatches: bool = False,
         pair: bool = False
     ):
+        multiple_of = mpu.get_data_parallel_world_size()
+        if mpu.get_virtual_pipeline_model_parallel_world_size() is not None:
+            multiple_of *= mpu.get_pipeline_model_parallel_world_size()
         max_length_per_dp = mpu.get_context_parallel_world_size() * mpu.get_tensor_model_parallel_world_size() * (
             self.config.max_length_per_device
             if torch.is_grad_enabled()
@@ -113,6 +117,7 @@ class MegatronWorker(Worker):
         return scatter_data(
             tensor_dict,
             mpu.get_data_parallel_group(),
+            multiple_of,
             max_length_per_dp,
             self.config.update_per_rollout if pack_minibatches else None,
             pair
@@ -221,9 +226,14 @@ class MegatronWorker(Worker):
             return output_tensor, partial(f, minibatch, cu_seqlens)
 
         forward_backward = get_forward_backward_func()
+        vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
+        if vpp_size:
+            data_iterator = [iter(minibatches) for _ in range(vpp_size)]
+        else:
+            data_iterator = iter(minibatches)
         output = forward_backward(
             model=self.model,
-            data_iterator=iter(minibatches),
+            data_iterator=data_iterator,
             num_microbatches=len(minibatches),
             forward_step_func=forward_step,
             seq_length=1,
@@ -239,10 +249,10 @@ class MegatronWorker(Worker):
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
-            for model in self.model:
-                model.zero_grad_buffer()
             self.optimizer.zero_grad()
             self.load_optimizer_to_device("cpu")
+            for model in self.model:
+                model.zero_grad_buffer()
             self.scheduler.step(1)
             metrics = {
                 k: sum([metric[k] for metric in output], [])

@@ -4,6 +4,7 @@ tf_config:
   recompute_method: uniform
   recompute_num_layers: 1
 pp_size: 1
+vpp_size: null
 cp_size: 1
 tp_size: 1
 ep_size: 1
