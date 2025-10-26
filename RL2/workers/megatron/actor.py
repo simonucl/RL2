@@ -210,7 +210,8 @@ class MegatronActor(MegatronWorker):
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-        self.offload_model_to_cpu()
+        if self.config.adv_estimator == "gae":
+            self.offload_model_to_cpu()
 
     @time_logger("update_rollout")
     def update_rollout(self, rollout, step):

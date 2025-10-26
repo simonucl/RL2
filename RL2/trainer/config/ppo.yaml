@@ -23,6 +23,7 @@ actor:
   avg_level: token
   freeze_steps: 0
   offload_model: true
+  adv_estimator: ${adv.estimator}
 
   kl:
     coef: 0.0

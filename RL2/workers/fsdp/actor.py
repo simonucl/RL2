@@ -224,7 +224,8 @@ class FSDPActor(FSDPWorker):
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-        self.load_model_to_device("cpu")
+        if self.config.adv_estimator == "gae":
+            self.load_model_to_device("cpu")
 
     @time_logger("update_rollout")
     def update_rollout(self, rollout, step):
