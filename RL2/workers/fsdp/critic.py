@@ -1,6 +1,5 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from transformers import  AutoModelForTokenClassification
 from RL2.workers.fsdp import FSDPWorker
 from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp

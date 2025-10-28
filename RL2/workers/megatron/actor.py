@@ -1,6 +1,5 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from megatron.core import parallel_state as mpu
 from RL2.workers.megatron import MegatronWorker
 from RL2.utils.sequences import count_total, gather_along_cp

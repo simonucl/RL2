@@ -1,6 +1,5 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from megatron.core import parallel_state as mpu
 from mbridge.utils.post_creation_callbacks import make_value_model
 from RL2.workers.megatron import MegatronWorker
