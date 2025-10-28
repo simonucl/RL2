@@ -7,7 +7,7 @@ from RL2.utils.sequences import count_total, gather_along_cp
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.algorithms import compute_approx_kl
+from RL2.utils.algorithms import dpo_loss, actor_ppo_loss
 from RL2.utils.logging import (
     time_logger,
     gather_and_log,
@@ -108,18 +108,9 @@ class MegatronActor(MegatronWorker):
                 mpu.get_context_parallel_group(),
                 cu_seqlens
             )
-            chosen_rewards, rejected_rewards = self.config.beta * (
-                minibatch["logps"] - minibatch["ref_logps"]
-            ).sum(-1).view(-1, 2).T
-            reward_margins = chosen_rewards - rejected_rewards
-            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
-            metric = {
-                "rewards/chosen": chosen_rewards.tolist(),
-                "rewards/rejected": rejected_rewards.tolist(),
-                "rewards/margin": reward_margins.tolist(),
-                "loss": [loss.item()],
-                "accuracy": (reward_margins > 0).tolist()
-            }
+            losses, metric = dpo_loss(self.config, minibatch)
+            loss = losses.sum() / total_pairs
+            metric["loss"] = [loss.item()]
             return self.scale_loss(loss), metric
 
         metrics, grad_norm = self.forward_backward(f, minibatches)
@@ -158,25 +149,7 @@ class MegatronActor(MegatronWorker):
                     cu_seqlens
                 )
 
-                ratio = torch.exp(
-                    minibatch["logps"] - minibatch.get(
-                        "old_logps", minibatch["logps"].detach()
-                    )
-                )
-                clipped_ratio = torch.clamp(
-                    ratio, 1 - self.config.clip, 1 + self.config.clip
-                )
-                objective = minibatch["advantages"] * ratio
-                clipped_objective = minibatch["advantages"] * clipped_ratio
-                losses = - torch.min(objective, clipped_objective)
-                clip_ratios = objective > clipped_objective
-
-                if self.config.tis_coef > 0:
-                    # https://fengyao.notion.site/off-policy-rl
-                    tis = torch.exp(
-                        minibatch["logps"].detach() - minibatch["llm_logps"]
-                    ).clamp(max=self.config.tis_coef)
-                    losses *= tis
+                losses, clip_ratios = actor_ppo_loss(self.config, minibatch)
 
                 loss, clip_ratio, entropy = aggregate_values(
                     (losses, clip_ratios, minibatch["entropy"]),
@@ -185,14 +158,6 @@ class MegatronActor(MegatronWorker):
                     total_actions,
                     total_sequences
                 )
-                loss = loss - self.config.entropy.coef * entropy
-                if self.config.kl.coef > 0 and self.config.kl.type == "loss":
-                    kl_loss = compute_approx_kl(
-                        minibatch["logps"],
-                        minibatch["ref_logps"],
-                        self.config.kl.loss_estimator
-                    ).sum() / total_actions
-                    loss = loss + self.config.kl.coef * kl_loss
 
                 metric = {
                     "actor/entropy": [entropy.item()],

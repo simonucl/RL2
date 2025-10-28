@@ -8,7 +8,7 @@ from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.algorithms import compute_approx_kl
+from RL2.utils.algorithms import dpo_loss, actor_ppo_loss
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -130,17 +130,12 @@ class FSDPActor(FSDPWorker):
             minibatches, desc="Update actor"
         ):
             minibatch = self.forward(minibatch)
-            chosen_rewards, rejected_rewards = self.config.beta * (
-                minibatch["logps"] - minibatch["ref_logps"]
-            ).sum(-1).view(-1, 2).T
-            reward_margins = chosen_rewards - rejected_rewards
-            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            losses, metric = dpo_loss(self.config, minibatch)
+            loss = losses.sum() / total_pairs
             self.scale_loss(loss).backward()
-            metrics["rewards/chosen"].extend(chosen_rewards.tolist())
-            metrics["rewards/rejected"].extend(rejected_rewards.tolist())
-            metrics["rewards/margin"].extend(reward_margins.tolist())
-            metrics["loss"].append(loss.item())
-            metrics["accuracy"].extend((reward_margins > 0).tolist())
+            metric["loss"] = [loss.item()]
+            for k, v in metric.items():
+                metrics[k].extend(v)
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
@@ -172,25 +167,7 @@ class FSDPActor(FSDPWorker):
                 minibatch = self.forward(
                     minibatch, return_entropy=True
                 )
-                ratio = torch.exp(
-                    minibatch["logps"] - minibatch.get(
-                        "old_logps", minibatch["logps"].detach()
-                    )
-                )
-                clipped_ratio = torch.clamp(
-                    ratio, 1 - self.config.clip, 1 + self.config.clip
-                )
-                objective = minibatch["advantages"] * ratio
-                clipped_objective = minibatch["advantages"] * clipped_ratio
-                losses = - torch.min(objective, clipped_objective)
-                clip_ratios = objective > clipped_objective
-
-                if self.config.tis_coef > 0:
-                    # https://fengyao.notion.site/off-policy-rl
-                    tis = torch.exp(
-                        minibatch["logps"].detach() - minibatch["llm_logps"]
-                    ).clamp(max=self.config.tis_coef)
-                    losses *= tis
+                losses, clip_ratios = actor_ppo_loss(self.config, minibatch)
                     
                 loss, clip_ratio, entropy = aggregate_values(
                     (losses, clip_ratios, minibatch["entropy"]),
@@ -199,14 +176,6 @@ class FSDPActor(FSDPWorker):
                     total_actions,
                     total_sequences
                 )
-                loss = loss - self.config.entropy.coef * entropy
-                if self.config.kl.coef > 0 and self.config.kl.type == "loss":
-                    kl_loss = compute_approx_kl(
-                        minibatch["logps"],
-                        minibatch["ref_logps"],
-                        self.config.kl.loss_estimator
-                    ).sum() / total_actions
-                    loss = loss + self.config.kl.coef * kl_loss
 
                 self.scale_loss(loss).backward()
 

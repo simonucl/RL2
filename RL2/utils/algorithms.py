@@ -111,3 +111,71 @@ def compute_advantages(
         ):
             indices = torch.where(tensor_dict["action_mask"][start:end])
             tensor_dict[k][start:end][indices] = v[idx][:len(indices[0])]
+
+def rm_loss(minibatch):
+
+    chosen_rewards, rejected_rewards = minibatch["values"].sum(-1).view(-1, 2).T
+    reward_margins = chosen_rewards - rejected_rewards
+    losses = - F.logsigmoid(reward_margins)
+    return losses, {"accuracy": (reward_margins > 0).tolist()}
+
+def dpo_loss(config, minibatch):
+
+    chosen_rewards, rejected_rewards = config.beta * (
+        minibatch["logps"] - minibatch["ref_logps"]
+    ).sum(-1).view(-1, 2).T
+    reward_margins = chosen_rewards - rejected_rewards
+    losses = - F.logsigmoid(reward_margins)
+    metric = {
+        "rewards/chosen": chosen_rewards.tolist(),
+        "rewards/rejected": rejected_rewards.tolist(),
+        "rewards/margin": reward_margins.tolist(),
+        "accuracy": (reward_margins > 0).tolist()
+    }
+    return losses, metric
+
+def actor_ppo_loss(config, minibatch):
+
+    ratio = torch.exp(
+        minibatch["logps"] - minibatch.get(
+            "old_logps", minibatch["logps"].detach()
+        )
+    )
+    clipped_ratio = torch.clamp(
+        ratio, 1 - config.clip, 1 + config.clip
+    )
+    objective = minibatch["advantages"] * ratio
+    clipped_objective = minibatch["advantages"] * clipped_ratio
+    losses = - torch.min(objective, clipped_objective)
+    clip_ratios = objective > clipped_objective
+
+    if config.kl.coef > 0 and config.kl.type == "loss":
+        kl_losses = compute_approx_kl(
+            minibatch["logps"],
+            minibatch["ref_logps"],
+            config.kl.loss_estimator
+        )
+        losses = losses + config.kl.coef * kl_losses
+
+    if config.tis_coef > 0:
+        # https://fengyao.notion.site/off-policy-rl
+        tis = torch.exp(
+            minibatch["logps"].detach() - minibatch["llm_logps"]
+        ).clamp(max=config.tis_coef)
+        losses *= tis
+
+    losses = losses - config.entropy.coef * minibatch["entropy"]
+    return losses, clip_ratios
+
+def critic_ppo_loss(config, minibatch):
+
+    clipped_values = torch.clamp(
+        minibatch["values"],
+        minibatch["old_values"] - config.clip,
+        minibatch["old_values"] + config.clip
+    )
+    mse = (minibatch["values"] - minibatch["returns"]).pow(2)
+    clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
+    losses = torch.max(mse, clipped_mse)
+    clip_ratios = mse < clipped_mse
+    return losses, clip_ratios
