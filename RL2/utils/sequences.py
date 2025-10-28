@@ -102,13 +102,13 @@ def scatter_data(
                 }
                 batches.append(
                     scatter_data(
-                        batch_tensor_dict, process_group, max_length_per_dp, pair=pair
+                        batch_tensor_dict, process_group, multiple_of, max_length_per_dp, pair=pair
                     )
                 )
             return batches
         else:
             return [
-                scatter_data(None, process_group, max_length_per_dp, pair=pair)
+                scatter_data(None, process_group, multiple_of, max_length_per_dp, pair=pair)
                 for _ in range(num_batches)
             ]
 
