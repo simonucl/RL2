@@ -113,6 +113,7 @@ class FSDPWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
+        torch.cuda.empty_cache()
         _lazy_init(self.model, self.model)
         for handle in self.model._all_handles:
             if handle._offload_params:
@@ -120,6 +121,7 @@ class FSDPWorker(Worker):
             flat_param = handle.flat_param
             handle.flat_param_to(device, non_blocking=True)
             flat_param._local_shard = flat_param.data
+        torch.cuda.empty_cache()
 
     def load_optimizer_to_device(self, device):
 

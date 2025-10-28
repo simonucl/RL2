@@ -131,6 +131,7 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
+        gc.collect()
         for model in self.model:
             if isinstance(model, DDP):
                 for buffers in [model.buffers, model.expert_parallel_buffers]:
@@ -142,8 +143,6 @@ class MegatronWorker(Worker):
             else:
                 for _, param in model.named_parameters():
                     param.data = param.data.to("cpu", non_blocking=True)
-
-        gc.collect()
         torch.cuda.empty_cache()
 
     def load_model_to_gpu(self):
@@ -151,6 +150,7 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
+        torch.cuda.empty_cache()
         for model in self.model:
             if isinstance(model, DDP):
                 for buffers in [model.buffers, model.expert_parallel_buffers]:
@@ -167,9 +167,7 @@ class MegatronWorker(Worker):
                         torch.cuda.current_device(),
                         non_blocking=True
                     )
-
         gc.collect()
-        torch.cuda.empty_cache()
 
     def load_optimizer_to_device(self, device):
 
