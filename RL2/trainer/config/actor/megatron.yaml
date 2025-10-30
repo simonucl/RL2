@@ -1,14 +1,14 @@
 model_name: null
 tf_config:
+  pipeline_model_parallel_size: 1
+  virtual_pipeline_model_parallel_size: null
+  context_parallel_size: 1
+  tensor_model_parallel_size: 1
+  expert_model_parallel_size: 1
+  expert_tensor_parallel_size: null
   recompute_granularity: full
   recompute_method: uniform
   recompute_num_layers: 1
-pp_size: 1
-vpp_size: null
-cp_size: 1
-tp_size: 1
-ep_size: 1
-etp_size: null
 max_length_per_device: null
 optimizer:
   lr: 1e-6

@@ -199,4 +199,9 @@ class FSDPActor(FSDPWorker):
     def update_rollout(self, rollout, step):
 
         state_dict = self.get_model_state_dict()
-        rollout.update(state_dict.items())
+        rollout.update(
+            progress_bar(
+                state_dict.items(),
+                desc="Update rollout"
+            )
+        )

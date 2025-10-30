@@ -4,13 +4,14 @@ import gc
 from functools import partial
 import torch
 import torch.distributed as dist
-from transformers import AutoConfig
 from megatron.core import (
     parallel_state as mpu,
-    tensor_parallel,
     dist_checkpointing
 )
-from megatron.core.distributed import DistributedDataParallel as DDP
+from megatron.core.distributed import (
+    DistributedDataParallel as DDP,
+    DistributedDataParallelConfig
+)
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
@@ -23,7 +24,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper
 )
-from mbridge import AutoBridge
+from megatron.bridge import AutoBridge
 from RL2.workers import Worker
 from RL2.utils.communication import broadcast_object
 from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
@@ -35,35 +36,26 @@ class MegatronWorker(Worker):
     def __init__(self, config, train: bool):
         super().__init__(config, train)
         
-        config = AutoConfig.from_pretrained(config.model_name)
-        self.bridge = AutoBridge.from_config(config) # TODO (P0): support Qwen3-Next
-        tf_config = (
-            OmegaConf.to_container(self.config.tf_config)
-            if hasattr(self.config, "tf_config") else {}
+        self.bridge = AutoBridge.from_hf_pretrained(config.model_name)
+
+        self.provider = self.bridge.to_megatron_provider()
+        self.provider.bf16 = True
+        self.provider.attention_backend = "flash"
+        tf_config = OmegaConf.to_container(config.tf_config)
+        for k, v in tf_config.items():
+            setattr(self.provider, k, v)
+        self.provider.sequence_parallel = self.provider.tensor_model_parallel_size > 1
+        self.provider.finalize()
+        self.provider.initialize_model_parallel(seed=42)
+
+        self.ddp_config = DistributedDataParallelConfig(
+            use_distributed_optimizer=True
         )
-        self.bridge.set_extra_args(
-            bf16=True,
-            attention_backend="flash",
-            **tf_config
-        )
-
-    def prepare_device_mesh(self):
-
-        if not mpu.is_initialized():
-
-            mpu.initialize_model_parallel(
-                pipeline_model_parallel_size=self.config.pp_size,
-                virtual_pipeline_model_parallel_size=self.config.vpp_size,
-                context_parallel_size=self.config.cp_size,
-                tensor_model_parallel_size=self.config.tp_size,
-                expert_model_parallel_size=self.config.ep_size,
-                expert_tensor_parallel_size=self.config.etp_size
-            )
-            tensor_parallel.model_parallel_cuda_manual_seed(42)
 
     def prepare_model_optimizer(self):
-        
-        self.bridge.load_weights(self.model, self.config.model_name)
+
+        if dist.get_rank() == 0:
+            print(self.model[0].config)
 
         if self.train:
 
@@ -311,7 +303,7 @@ class MegatronWorker(Worker):
     def save_model(self, save_dir):
 
         self.load_model_to_gpu()
-        self.bridge.save_weights(self.model, save_dir)
+        self.bridge.save_hf_pretrained(self.model, save_dir)
         self.offload_model_to_cpu()
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)

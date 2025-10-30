@@ -18,25 +18,26 @@ from RL2.utils.sequences import scatter_data, gather_data
 
 class FSDPWorker(Worker):
 
-    def prepare_device_mesh(self):
+    def __init__(self, config, train):
+        super().__init__(config, train)
 
         world_size = dist.get_world_size()
-        assert world_size % (self.config.ddp_size * self.config.tp_size) == 0, \
-            f"World_size {world_size} must be divisible by ddp_size {self.config.ddp_size} * tp_size {self.config.tp_size}."
-        self.fsdp_size = world_size // (self.config.ddp_size * self.config.tp_size)
+        assert world_size % (config.ddp_size * config.tp_size) == 0, \
+            f"World_size {world_size} must be divisible by ddp_size {config.ddp_size} * tp_size {config.tp_size}."
+        self.fsdp_size = world_size // (config.ddp_size * config.tp_size)
         self.model_device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_dim_names=("ddp", "fsdp", "tp"),
-            mesh_shape=(self.config.ddp_size, self.fsdp_size, self.config.tp_size)
+            mesh_shape=(config.ddp_size, self.fsdp_size, config.tp_size)
         )
 
-        assert world_size % (self.config.cp_size * self.config.tp_size) == 0, \
-            f"World_size {world_size} must be divisible by cp_size {self.config.cp_size} * tp_size {self.config.tp_size}."
-        self.dp_size = world_size // (self.config.cp_size * self.config.tp_size)
+        assert world_size % (config.cp_size * config.tp_size) == 0, \
+            f"World_size {world_size} must be divisible by cp_size {config.cp_size} * tp_size {config.tp_size}."
+        self.dp_size = world_size // (config.cp_size * config.tp_size)
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_dim_names=("dp", "cp", "tp"),
-            mesh_shape=(self.dp_size, self.config.cp_size, self.config.tp_size)
+            mesh_shape=(self.dp_size, config.cp_size, config.tp_size)
         )
 
     def init_weight_context(self):

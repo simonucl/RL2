@@ -20,7 +20,10 @@ class MegatronActor(MegatronWorker):
     def __init__(self, config, train: bool):
         super().__init__(config, train)
 
-        self.model = self.bridge.get_model(wrap_with_ddp=train)
+        self.model = self.provider.provide_distributed_model(
+            ddp_config=self.ddp_config,
+            wrap_with_ddp=train
+        )
         self.prepare_model_optimizer()
 
     @time_logger("compute_logps")
@@ -181,6 +184,8 @@ class MegatronActor(MegatronWorker):
     def update_rollout(self, rollout, step):
 
         self.load_model_to_gpu()
-        named_tensor_generator = self.bridge.export_weights(self.model)
+        named_tensor_generator = self.bridge.export_hf_weights(
+            self.model, cpu=True
+        )
         rollout.update(named_tensor_generator)
         self.offload_model_to_cpu()

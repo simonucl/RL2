@@ -1,7 +1,6 @@
 from collections import defaultdict
 import torch
 from megatron.core import parallel_state as mpu
-from mbridge.utils.post_creation_callbacks import make_value_model
 from RL2.workers.megatron import MegatronWorker
 from RL2.utils.sequences import count_total, gather_along_cp
 from RL2.utils.functions import aggregate_values
@@ -13,17 +12,16 @@ from RL2.utils.logging import (
     rank0_log
 )
 
+
 class MegatronCritic(MegatronWorker):
     
     def __init__(self, config):
         super().__init__(config, True)
 
-        self.model = self.bridge.get_model(
-            wrap_with_ddp=True,
-            post_model_creation_callbacks=[
-                make_value_model
-            ]
-        )
+        self.model = self.provider.provide_distributed_model(
+            ddp_config=self.ddp_config,
+            wrap_with_ddp=True
+        ) # TODO: make value model
         self.prepare_model_optimizer()
 
     @time_logger("compute_values")
