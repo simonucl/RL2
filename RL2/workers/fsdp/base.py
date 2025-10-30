@@ -156,11 +156,11 @@ class FSDPWorker(Worker):
         self.scheduler.step()
         return grad_norm.item()
 
-    def get_model_state_dict(self, full_state_dict=False, cpu_offload=True):
+    def get_model_state_dict(self, full_state_dict=False):
 
         options = StateDictOptions(
             full_state_dict=full_state_dict,
-            cpu_offload=cpu_offload
+            cpu_offload=True
         )
         self.load_model_to_device(torch.cuda.current_device())
         state_dict = get_model_state_dict(self.model, options=options)

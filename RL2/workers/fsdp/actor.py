@@ -198,5 +198,5 @@ class FSDPActor(FSDPWorker):
     @time_logger("update_rollout")
     def update_rollout(self, rollout, step):
 
-        state_dict = self.get_model_state_dict(cpu_offload=False)
+        state_dict = self.get_model_state_dict()
         rollout.update(state_dict.items())
