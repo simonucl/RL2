@@ -192,7 +192,7 @@ The product of `ddp_size` and `tp_size` should be a factor of the total number o
 For SFT, RM, and DPO, `max_length` is used to truncate sequences.
 In RM and DPO, the chosen and rejected sequences will be packed together, so the actual sequence length can be up to twice of `max_length`.
 For PPO, `max_new_tokens` is used to terminate generations.
-The length of any sequence cannot exceed `sp_size * tp_size * max_length_per_device`.
+The length of any sequence cannot exceed `cp_size * tp_size * max_length_per_device`.
 
 ### Algorithm
 

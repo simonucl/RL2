@@ -304,13 +304,13 @@ class Rollout:
     @torch.no_grad()
     def update(self, named_tensor_generator):
 
-        self.make_request("flush_cache", "GET")
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
         self.make_request("resume_memory_occupation", payload={"tags": [GPU_MEMORY_TYPE_WEIGHTS]})
 
         for name, tensor in named_tensor_generator:
+            tensor = tensor.to(torch.cuda.current_device())
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )

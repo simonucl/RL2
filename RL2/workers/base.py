@@ -7,7 +7,6 @@ class Worker:
         self.config = config
         self.train = train
 
-        self.prepare_device_mesh()
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.model_name, trust_remote_code=True
         )

@@ -1,6 +1,5 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 from RL2.workers.fsdp import FSDPWorker
 from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
@@ -8,7 +7,7 @@ from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import (
     compute_logps_and_entropy, aggregate_values
 )
-from RL2.utils.algorithms import compute_approx_kl
+from RL2.utils.algorithms import dpo_loss, actor_ppo_loss, actor_gspo_loss, actor_cispo_loss, track_tis_metrics
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -130,17 +129,12 @@ class FSDPActor(FSDPWorker):
             minibatches, desc="Update actor"
         ):
             minibatch = self.forward(minibatch)
-            chosen_rewards, rejected_rewards = self.config.beta * (
-                minibatch["logps"] - minibatch["ref_logps"]
-            ).sum(-1).view(-1, 2).T
-            reward_margins = chosen_rewards - rejected_rewards
-            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            losses, metric = dpo_loss(self.config, minibatch)
+            loss = losses.sum() / total_pairs
             self.scale_loss(loss).backward()
-            metrics["rewards/chosen"].extend(chosen_rewards.tolist())
-            metrics["rewards/rejected"].extend(rejected_rewards.tolist())
-            metrics["rewards/margin"].extend(reward_margins.tolist())
-            metrics["loss"].append(loss.item())
-            metrics["accuracy"].extend((reward_margins > 0).tolist())
+            metric["loss"] = [loss.item()]
+            for k, v in metric.items():
+                metrics[k].extend(v)
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
@@ -172,122 +166,26 @@ class FSDPActor(FSDPWorker):
                 minibatch = self.forward(
                     minibatch, return_entropy=True
                 )
-                logps = minibatch["logps"]
-                old_logps = minibatch.get("old_logps", logps.detach())
-                advantages = minibatch["advantages"]
-                action_mask = minibatch["action_mask"]
-                entropy_tensor = minibatch["entropy"]
-
+                
                 loss_type = getattr(self.config, "loss_type", "grpo")
                 if loss_type == "grpo":
-                    ratio = torch.exp(logps - old_logps)
-                    clipped_ratio = torch.clamp(
-                        ratio, 1 - self.config.clip, 1 + self.config.clip
-                    )
-                    objective = advantages * ratio
-                    clipped_objective = advantages * clipped_ratio
-                    losses = - torch.min(objective, clipped_objective)
-                    clip_ratios = objective > clipped_objective
-                    # TODO add track tis metrics
-                    if self.config.tis_coef > 0:
-                        tis = torch.exp(
-                            logps.detach() - minibatch["llm_logps"]
-                        ).clamp(max=self.config.tis_coef)
-                        losses *= tis
-
-                    # Track TIS metrics if enabled (independent of tis_coef)
-                    if getattr(self.config, 'track_tis', False):
-                        tis_raw = logps.detach() - minibatch["llm_logps"]
-                        tis_raw_v2 = 0.5 * (tis_raw ** 2)
-                        tis_raw_mean, tis_raw_v2_mean = aggregate_values(
-                            (tis_raw, tis_raw_v2),
-                            minibatch["action_mask"],
-                            self.config.avg_level,
-                            total_actions,
-                            total_sequences
-                        )
-                        metric["actor/tis_raw_mean"].append(tis_raw_mean.item())
-                        metric["actor/tis_raw_v2_mean"].append(tis_raw_v2_mean.item())
-                        
-                        if self.config.tis_coef > 0 and tis is not None:
-                            metric["actor/tis_clamped_mean"].append(
-                                aggregate_values(
-                                    tis,
-                                    minibatch["action_mask"],
-                                    self.config.avg_level,
-                                    total_actions,
-                                    total_sequences
-                                ).item()
-                            )
-                    loss, clip_ratio, entropy = aggregate_values(
-                        (losses, clip_ratios, entropy_tensor),
-                        action_mask,
-                        self.config.avg_level,
-                        total_actions,
-                        total_sequences
-                    )
-                    
+                    losses, clip_ratios = actor_ppo_loss(self.config, minibatch)                    
                 elif loss_type == "gspo":
-                    seq_lengths = action_mask.sum(-1).clamp(min=1e-8)
-
-                    token_log_ratios = logps - old_logps
-                    sum_log_ratios = (token_log_ratios * action_mask).sum(-1)
-                    mean_log_ratios = sum_log_ratios / seq_lengths
-                    seq_ratios = torch.exp(mean_log_ratios)
-
-                    # To get the last non-zero in dimension 1, use masked indexing with action_mask:
-                    # This gets the index of the last non-masked ("active") token for each sequence
-                    last_indices = (action_mask.sum(dim=1) - 1).long().clamp(min=0)
-                    seq_advantages = advantages[torch.arange(advantages.size(0)), last_indices]
-                    clipped_seq_ratios = torch.clamp(
-                        seq_ratios, 1 - self.config.clip, 1 + self.config.clip
-                    )
-                    objective = seq_ratios * seq_advantages
-                    clipped_objective = clipped_seq_ratios * seq_advantages
-                    seq_losses = - torch.min(objective, clipped_objective)
-                    loss = seq_losses.sum() / total_sequences
-                    clip_ratios_bool = objective > clipped_objective
-                    clip_ratio = (clip_ratios_bool.float().sum() / total_sequences)
-
-                    entropy = aggregate_values(
-                        entropy_tensor,
-                        action_mask,
-                        self.config.avg_level,
-                        total_actions,
-                        total_sequences
-                    )
-
+                    losses, clip_ratios = actor_gspo_loss(self.config, minibatch, total_sequences)
                 elif loss_type == "cispo":
-                    clip_max = getattr(self.config, "clip_max", 5.0)
-
-                    ratio = torch.exp(logps - old_logps)
-                    weights = torch.min(
-                        ratio, torch.tensor(clip_max, device=ratio.device)
-                    ).detach()
-
-                    pg_term = advantages * logps
-                    losses = - (weights * pg_term)
-
-                    loss, entropy, mean_weight = aggregate_values(
-                        (losses, entropy_tensor, weights),
-                        action_mask,
-                        self.config.avg_level,
-                        total_actions,
-                        total_sequences
-                    )
-                    metric["actor/mean_weight"].append(mean_weight.item())
-                    clip_ratio = torch.tensor(0.0, device=loss.device)
+                    losses, clip_ratios = actor_cispo_loss(self.config, minibatch)
                 else:
                     raise ValueError(f"Invalid loss type: {loss_type}")
-
-                loss = loss - self.config.entropy.coef * entropy
-                if self.config.kl.coef > 0 and self.config.kl.type == "loss":
-                    kl_loss = compute_approx_kl(
-                        minibatch["logps"],
-                        minibatch["ref_logps"],
-                        self.config.kl.loss_estimator
-                    ).sum() / total_actions
-                    loss = loss + self.config.kl.coef * kl_loss
+                    
+                loss, clip_ratio, entropy = aggregate_values(
+                    (losses, clip_ratios, minibatch["entropy"]),
+                    minibatch["action_mask"],
+                    self.config.avg_level,
+                    total_actions,
+                    total_sequences
+                )
+                if getattr(self.config, 'track_tis', False):
+                    metric.update(track_tis_metrics(self.config, minibatch, total_actions, total_sequences))
 
                 self.scale_loss(loss).backward()
 
@@ -305,7 +203,8 @@ class FSDPActor(FSDPWorker):
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-        self.load_model_to_device("cpu")
+        if self.config.adv_estimator == "gae":
+            self.load_model_to_device("cpu")
 
     @time_logger("update_rollout")
     def update_rollout(self, rollout, step):

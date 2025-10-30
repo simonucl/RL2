@@ -4,11 +4,13 @@ import gc
 from functools import partial
 import torch
 import torch.distributed as dist
-from transformers import AutoConfig
 from megatron.core import (
     parallel_state as mpu,
-    tensor_parallel,
     dist_checkpointing
+)
+from megatron.core.distributed import (
+    DistributedDataParallel as DDP,
+    DistributedDataParallelConfig
 )
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
@@ -22,7 +24,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper
 )
-from mbridge import AutoBridge
+from megatron.bridge import AutoBridge
 from RL2.workers import Worker
 from RL2.utils.communication import broadcast_object
 from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
@@ -34,34 +36,26 @@ class MegatronWorker(Worker):
     def __init__(self, config, train: bool):
         super().__init__(config, train)
         
-        config = AutoConfig.from_pretrained(config.model_name)
-        self.bridge = AutoBridge.from_config(config) # TODO (P0): support Qwen3-Next
-        tf_config = (
-            OmegaConf.to_container(self.config.tf_config)
-            if hasattr(self.config, "tf_config") else {}
-        )
-        self.bridge.set_extra_args(
-            bf16=True,
-            attention_backend="flash",
-            **tf_config
-        )
+        self.bridge = AutoBridge.from_hf_pretrained(config.model_name)
 
-    def prepare_device_mesh(self):
+        self.provider = self.bridge.to_megatron_provider()
+        self.provider.bf16 = True
+        self.provider.attention_backend = "flash"
+        tf_config = OmegaConf.to_container(config.tf_config)
+        for k, v in tf_config.items():
+            setattr(self.provider, k, v)
+        self.provider.sequence_parallel = self.provider.tensor_model_parallel_size > 1
+        self.provider.finalize()
+        self.provider.initialize_model_parallel(seed=42)
 
-        if not mpu.is_initialized():
-            # TODO: support vpp
-            mpu.initialize_model_parallel(
-                pipeline_model_parallel_size=self.config.pp_size,
-                context_parallel_size=self.config.cp_size,
-                tensor_model_parallel_size=self.config.tp_size,
-                expert_model_parallel_size=self.config.ep_size,
-                expert_tensor_parallel_size=self.config.etp_size
-            )
-            tensor_parallel.model_parallel_cuda_manual_seed(42)
+        self.ddp_config = DistributedDataParallelConfig(
+            use_distributed_optimizer=True
+        )
 
     def prepare_model_optimizer(self):
-        
-        self.bridge.load_weights(self.model, self.config.model_name)
+
+        if dist.get_rank() == 0:
+            print(self.model[0].config)
 
         if self.train:
 
@@ -104,6 +98,9 @@ class MegatronWorker(Worker):
         pack_minibatches: bool = False,
         pair: bool = False
     ):
+        multiple_of = mpu.get_data_parallel_world_size()
+        if mpu.get_virtual_pipeline_model_parallel_world_size() is not None:
+            multiple_of *= mpu.get_pipeline_model_parallel_world_size()
         max_length_per_dp = mpu.get_context_parallel_world_size() * mpu.get_tensor_model_parallel_world_size() * (
             self.config.max_length_per_device
             if torch.is_grad_enabled()
@@ -112,6 +109,7 @@ class MegatronWorker(Worker):
         return scatter_data(
             tensor_dict,
             mpu.get_data_parallel_group(),
+            multiple_of,
             max_length_per_dp,
             self.config.update_per_rollout if pack_minibatches else None,
             pair
@@ -125,15 +123,18 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
-        for model in self.model:
-            for buffers in [model.buffers, model.expert_parallel_buffers]:
-                for buffer in buffers:
-                    if buffer.param_data.storage().size() > 0:
-                        buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
-                        buffer.param_data_size = buffer.param_data.storage().size()
-                        buffer.param_data.storage().resize_(0)
-
         gc.collect()
+        for model in self.model:
+            if isinstance(model, DDP):
+                for buffers in [model.buffers, model.expert_parallel_buffers]:
+                    for buffer in buffers:
+                        if buffer.param_data.storage().size() > 0:
+                            buffer.param_data.cpu_data = buffer.param_data.data.cpu().pin_memory()
+                            buffer.param_data_size = buffer.param_data.storage().size()
+                            buffer.param_data.storage().resize_(0)
+            else:
+                for _, param in model.named_parameters():
+                    param.data = param.data.to("cpu", non_blocking=True)
         torch.cuda.empty_cache()
 
     def load_model_to_gpu(self):
@@ -141,18 +142,24 @@ class MegatronWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
-        for model in self.model:
-            for buffers in [model.buffers, model.expert_parallel_buffers]:
-                for buffer in buffers:
-                    if buffer.param_data.storage().size() == 0:
-                        buffer.param_data.storage().resize_(buffer.param_data_size)
-                        buffer.param_data.copy_(
-                            buffer.param_data.cpu_data,
-                            non_blocking=True
-                        )
-
-        gc.collect()
         torch.cuda.empty_cache()
+        for model in self.model:
+            if isinstance(model, DDP):
+                for buffers in [model.buffers, model.expert_parallel_buffers]:
+                    for buffer in buffers:
+                        if buffer.param_data.storage().size() == 0:
+                            buffer.param_data.storage().resize_(buffer.param_data_size)
+                            buffer.param_data.copy_(
+                                buffer.param_data.cpu_data,
+                                non_blocking=True
+                            )
+            else:
+                for _, param in model.named_parameters():
+                    param.data = param.data.to(
+                        torch.cuda.current_device(),
+                        non_blocking=True
+                    )
+        gc.collect()
 
     def load_optimizer_to_device(self, device):
 
@@ -209,9 +216,14 @@ class MegatronWorker(Worker):
             return output_tensor, partial(f, minibatch, cu_seqlens)
 
         forward_backward = get_forward_backward_func()
+        vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
+        if vpp_size:
+            data_iterator = [iter(minibatches) for _ in range(vpp_size)]
+        else:
+            data_iterator = iter(minibatches)
         output = forward_backward(
             model=self.model,
-            data_iterator=iter(minibatches),
+            data_iterator=data_iterator,
             num_microbatches=len(minibatches),
             forward_step_func=forward_step,
             seq_length=1,
@@ -227,10 +239,10 @@ class MegatronWorker(Worker):
         if torch.is_grad_enabled():
             self.load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
-            for model in self.model:
-                model.zero_grad_buffer()
             self.optimizer.zero_grad()
             self.load_optimizer_to_device("cpu")
+            for model in self.model:
+                model.zero_grad_buffer()
             self.scheduler.step(1)
             metrics = {
                 k: sum([metric[k] for metric in output], [])
@@ -291,7 +303,7 @@ class MegatronWorker(Worker):
     def save_model(self, save_dir):
 
         self.load_model_to_gpu()
-        self.bridge.save_weights(self.model, save_dir)
+        self.bridge.save_hf_pretrained(self.model, save_dir)
         self.offload_model_to_cpu()
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)

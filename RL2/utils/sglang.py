@@ -78,6 +78,7 @@ def launch_router_process(worker_urls):
 
     router_args = RouterArgs(
         worker_urls=worker_urls,
+        policy="cache_aware",
         host=get_host(),
         port=get_available_port(),
         log_level="error"

@@ -21,25 +21,26 @@ from RL2.utils.lora import wrap_peft_model
 
 class FSDPWorker(Worker):
 
-    def prepare_device_mesh(self):
+    def __init__(self, config, train):
+        super().__init__(config, train)
 
         world_size = dist.get_world_size()
-        assert world_size % (self.config.ddp_size * self.config.tp_size) == 0, \
-            f"World_size {world_size} must be divisible by ddp_size {self.config.ddp_size} * tp_size {self.config.tp_size}."
-        self.fsdp_size = world_size // (self.config.ddp_size * self.config.tp_size)
+        assert world_size % (config.ddp_size * config.tp_size) == 0, \
+            f"World_size {world_size} must be divisible by ddp_size {config.ddp_size} * tp_size {config.tp_size}."
+        self.fsdp_size = world_size // (config.ddp_size * config.tp_size)
         self.model_device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_dim_names=("ddp", "fsdp", "tp"),
-            mesh_shape=(self.config.ddp_size, self.fsdp_size, self.config.tp_size)
+            mesh_shape=(config.ddp_size, self.fsdp_size, config.tp_size)
         )
 
-        assert world_size % (self.config.cp_size * self.config.tp_size) == 0, \
-            f"World_size {world_size} must be divisible by cp_size {self.config.cp_size} * tp_size {self.config.tp_size}."
-        self.dp_size = world_size // (self.config.cp_size * self.config.tp_size)
+        assert world_size % (config.cp_size * config.tp_size) == 0, \
+            f"World_size {world_size} must be divisible by cp_size {config.cp_size} * tp_size {config.tp_size}."
+        self.dp_size = world_size // (config.cp_size * config.tp_size)
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_dim_names=("dp", "cp", "tp"),
-            mesh_shape=(self.dp_size, self.config.cp_size, self.config.tp_size)
+            mesh_shape=(self.dp_size, config.cp_size, config.tp_size)
         )
 
     def init_weight_context(self):
@@ -105,6 +106,7 @@ class FSDPWorker(Worker):
         return scatter_data(
             tensor_dict,
             self.device_mesh["dp"].get_group(),
+            self.device_mesh["dp"].size(),
             max_length_per_dp,
             self.config.update_per_rollout if pack_minibatches else None,
             pair
@@ -118,6 +120,7 @@ class FSDPWorker(Worker):
         if not getattr(self.config, "offload_model", False):
             return
 
+        torch.cuda.empty_cache()
         _lazy_init(self.model, self.model)
         for handle in self.model._all_handles:
             if handle._offload_params:
@@ -125,6 +128,7 @@ class FSDPWorker(Worker):
             flat_param = handle.flat_param
             handle.flat_param_to(device, non_blocking=True)
             flat_param._local_shard = flat_param.data
+        torch.cuda.empty_cache()
 
     def load_optimizer_to_device(self, device):
 
@@ -159,11 +163,11 @@ class FSDPWorker(Worker):
         self.scheduler.step()
         return grad_norm.item()
 
-    def get_model_state_dict(self, full_state_dict=False, cpu_offload=True):
+    def get_model_state_dict(self, full_state_dict=False):
 
         options = StateDictOptions(
             full_state_dict=full_state_dict,
-            cpu_offload=cpu_offload
+            cpu_offload=True
         )
         self.load_model_to_device(torch.cuda.current_device())
         state_dict = get_model_state_dict(self.model, options=options)

@@ -9,7 +9,7 @@ from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 
 def tensor_dict_to_minibatches(
     tensor_dict,
-    dp_size,
+    multiple_of,
     max_length_per_dp,
     pair: bool
 ):
@@ -35,8 +35,8 @@ def tensor_dict_to_minibatches(
         f"The longest sequence has a length of {max(seq_len_list)}," \
         f"which exceeds the maximum length per dp {max_length_per_dp}."
     n_minibatches = math.ceil(sum(seq_len_list) / max_length_per_dp)
-    if n_minibatches % dp_size != 0:
-        n_minibatches += dp_size - n_minibatches % dp_size
+    if n_minibatches % multiple_of != 0:
+        n_minibatches += multiple_of - n_minibatches % multiple_of
 
     # Partition sequences into n_minibatches balanced minibatches.
     while True:
@@ -65,7 +65,7 @@ def tensor_dict_to_minibatches(
         ])
         if max_minibatch_length <= max_length_per_dp:
             break
-        n_minibatches += dp_size
+        n_minibatches += multiple_of
 
     if pair:
         partitions = [
@@ -85,6 +85,7 @@ def tensor_dict_to_minibatches(
 def scatter_data(
     tensor_dict,
     process_group,
+    multiple_of,
     max_length_per_dp,
     num_batches=None,
     pair=False
@@ -101,13 +102,13 @@ def scatter_data(
                 }
                 batches.append(
                     scatter_data(
-                        batch_tensor_dict, process_group, max_length_per_dp, pair=pair
+                        batch_tensor_dict, process_group, multiple_of, max_length_per_dp, pair=pair
                     )
                 )
             return batches
         else:
             return [
-                scatter_data(None, process_group, max_length_per_dp, pair=pair)
+                scatter_data(None, process_group, multiple_of, max_length_per_dp, pair=pair)
                 for _ in range(num_batches)
             ]
 
@@ -115,7 +116,7 @@ def scatter_data(
     dp_size = dist.get_world_size(process_group)
     if dist.get_rank() == 0:
         minibatches = tensor_dict_to_minibatches(
-            tensor_dict, dp_size, max_length_per_dp, pair
+            tensor_dict, multiple_of, max_length_per_dp, pair
         )
     minibatches = broadcast_object(
         minibatches if dist.get_rank() == 0 else None,

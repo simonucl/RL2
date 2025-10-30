@@ -1,11 +1,11 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from transformers import  AutoModelForTokenClassification
 from RL2.workers.fsdp import FSDPWorker
 from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
 from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
 from RL2.utils.functions import aggregate_values
+from RL2.utils.algorithms import rm_loss, critic_ppo_loss
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -80,12 +80,12 @@ class FSDPCritic(FSDPWorker):
             minibatches, desc="Update critic"
         ):
             minibatch = self.forward(minibatch)
-            chosen_rewards, rejected_rewards = minibatch["values"].sum(-1).view(-1, 2).T
-            reward_margins = chosen_rewards - rejected_rewards
-            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
+            losses, metric = rm_loss(minibatch)
+            loss = losses.sum() / total_pairs
             self.scale_loss(loss).backward()
-            metrics["loss"].append(loss.item())
-            metrics["accuracy"].extend((reward_margins > 0).tolist())
+            metric["loss"] = [loss.item()]
+            for k, v in metric.items():
+                metrics[k].extend(v)
 
         grad_norm = self.optimizer_step()
         metrics["grad_norm"].append(grad_norm)
@@ -113,15 +113,7 @@ class FSDPCritic(FSDPWorker):
             for minibatch in batch:
 
                 minibatch = self.forward(minibatch)
-                clipped_values = torch.clamp(
-                    minibatch["values"],
-                    minibatch["old_values"] - self.config.clip,
-                    minibatch["old_values"] + self.config.clip
-                )
-                mse = (minibatch["values"] - minibatch["returns"]).pow(2)
-                clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
-                losses = torch.max(mse, clipped_mse)
-                clip_ratios = mse < clipped_mse
+                losses, clip_ratios = critic_ppo_loss(self.config, minibatch)
 
                 loss, clip_ratio = aggregate_values(
                     (losses, clip_ratios),

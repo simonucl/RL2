@@ -1,11 +1,10 @@
 from collections import defaultdict
 import torch
-import torch.nn.functional as F
 from megatron.core import parallel_state as mpu
-from mbridge.utils.post_creation_callbacks import make_value_model
 from RL2.workers.megatron import MegatronWorker
 from RL2.utils.sequences import count_total, gather_along_cp
 from RL2.utils.functions import aggregate_values
+from RL2.utils.algorithms import rm_loss, critic_ppo_loss
 from RL2.utils.logging import (
     time_logger,
     gather_and_log,
@@ -13,17 +12,16 @@ from RL2.utils.logging import (
     rank0_log
 )
 
+
 class MegatronCritic(MegatronWorker):
     
     def __init__(self, config):
         super().__init__(config, True)
 
-        self.model = self.bridge.get_model(
-            wrap_with_ddp=True,
-            post_model_creation_callbacks=[
-                make_value_model
-            ]
-        )
+        self.model = self.provider.provide_distributed_model(
+            ddp_config=self.ddp_config,
+            wrap_with_ddp=True
+        ) # TODO: make value model
         self.prepare_model_optimizer()
 
     @time_logger("compute_values")
@@ -64,14 +62,10 @@ class MegatronCritic(MegatronWorker):
                 mpu.get_context_parallel_group(),
                 cu_seqlens
             )
-            chosen_rewards, rejected_rewards = minibatch["values"].sum(-1).view(-1, 2).T
-            reward_margins = chosen_rewards - rejected_rewards
-            loss = - F.logsigmoid(reward_margins).sum() / total_pairs
-            metric = {
-                "loss": [loss.item()],
-                "accuracy": (reward_margins > 0).tolist()
-            }
-            return self.scale_loss(loss), 1, metric
+            losses, metric = rm_loss(minibatch)
+            loss = losses.sum() / total_pairs
+            metric["loss"] = [loss.item()]
+            return self.scale_loss(loss), metric
 
         metrics, grad_norm = self.forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
@@ -101,16 +95,7 @@ class MegatronCritic(MegatronWorker):
                     mpu.get_context_parallel_group(),
                     cu_seqlens
                 )
-                clipped_values = torch.clamp(
-                    minibatch["values"],
-                    minibatch["old_values"] - self.config.clip,
-                    minibatch["old_values"] + self.config.clip
-                )
-
-                mse = (minibatch["values"] - minibatch["returns"]).pow(2)
-                clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
-                losses = torch.max(mse, clipped_mse)
-                clip_ratios = mse < clipped_mse
+                losses, clip_ratios = critic_ppo_loss(self.config, minibatch)
 
                 loss, clip_ratio = aggregate_values(
                     (losses, clip_ratios),
@@ -125,7 +110,7 @@ class MegatronCritic(MegatronWorker):
                     "critic/clip_ratio": [clip_ratio.item()]
                 }
 
-                return self.scale_loss(loss), 1, metric
+                return self.scale_loss(loss), metric
 
             metric, grad_norm = self.forward_backward(f, batch)
             for k, v in metric.items():
